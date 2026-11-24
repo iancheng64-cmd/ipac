@@ -23,7 +23,8 @@ enum InstantResume {
         let commit = info["HengeBuildCommit"] as? String ?? "unstamped"
         let stamp = info["HengeBuildDate"] as? String ?? "?"
         return "Henge \(version) (\(build)) \(commit) \(stamp) mac \(mac.id.uuidString) ram \(ramMB) cpus \(cpus) "
-            + "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)"
+            + "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina) "
+            + "host \(Device.modelIdentifier) phys \(ProcessInfo.processInfo.physicalMemory >> 20)"
     }
 
     /// A whole saved Mac for these settings, and when it was saved.
@@ -34,10 +35,14 @@ enum InstantResume {
     }
 
     /// Whether a file is there at all (the Home screen's hint; the start checks it properly).
-    static func hasSave(for mac: VirtualMac) -> Bool { FileManager.default.fileExists(atPath: file(for: mac).path) }
+    static func hasSave(for mac: VirtualMac) -> Bool {
+        guard mac.isAvailable else { return false }
+        return FileManager.default.fileExists(atPath: file(for: mac).path)
+    }
 
     /// The file, and a half-written one from a save iOS cut short (the engine writes beside it, then renames).
     static func discard(for mac: VirtualMac) {
+        guard mac.isAvailable else { return }
         try? FileManager.default.removeItem(at: file(for: mac))
         try? FileManager.default.removeItem(at: mac.directory.appendingPathComponent("resume.hsnap.part"))
     }
@@ -54,7 +59,7 @@ enum InstantResume {
 
     /// Henge is in the background: write the paused Mac out, in case iOS closes Henge. It stays paused.
     static func suspend(_ mac: VirtualMac, ramMB: UInt64, cpus: Int) {
-        guard enabled, henge_vm_state() == 1 || henge_vm_state() == 4 else { return }
+        guard enabled, mac.isAvailable, henge_vm_state() == 1 || henge_vm_state() == 4 else { return }
         let path = file(for: mac).path, id = ident(for: mac, ramMB: ramMB, cpus: cpus)
         var task = UIBackgroundTaskIdentifier.invalid
         task = UIApplication.shared.beginBackgroundTask(withName: "Henge save") {

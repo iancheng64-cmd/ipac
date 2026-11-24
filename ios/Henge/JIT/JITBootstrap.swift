@@ -65,8 +65,17 @@ enum JITBootstrap {
     /// where 1 GB and its records left a 2 GB Mac too little room in Setup, #70). A bigger cache fills and empties less
     /// often (macOS 27 filled 1 GB about once a minute) and costs more memory (its blocks' records come to about 0.75 of
     /// its size). Fixed for the launch: the region is claimed once.
-    static let defaultCodeCacheMB: Int = Entitlements.memoryLimitAtLaunch >= 5_500 << 20 ? 1536
-        : Entitlements.memoryLimitAtLaunch >= 3_500 << 20 ? 1024 : 512
+    /// On 8 GB M1 devices (e.g., iPad Air M1 with 7644 MiB physical RAM), even when increased-memory-limit raises
+    /// `memoryLimitAtLaunch` above 5.5 GB, a 1.5 GB code cache (~2.63 GB with block records) leaves too little
+    /// headroom alongside a 4 GB macOS guest and iPadOS. Default 8 GB devices to 1024 MB (1 GB) while reserving
+    /// 1536 MB default for >= 10 GB devices.
+    static let defaultCodeCacheMB: Int = {
+        let physMB = ProcessInfo.processInfo.physicalMemory >> 20
+        if physMB >= 10_000 && Entitlements.memoryLimitAtLaunch >= 5_500 << 20 {
+            return 1536
+        }
+        return Entitlements.memoryLimitAtLaunch >= 3_500 << 20 ? 1024 : 512
+    }()
     static let jitBytes: Int = {
         switch (UserDefaults.standard.object(forKey: codeCacheKey) as? Int) ?? defaultCodeCacheMB {
         case 1536: return 1536 << 20
@@ -142,13 +151,7 @@ enum JITBootstrap {
             HengeLog.log("jit", "no trap servicer, but MAP_JIT executes here -- "
                              + "QEMU will map its own buffer")
         } else {
-            lastFailure = "The debugger is attached but is not answering trap "
-                        + "requests, and this device will not execute a MAP_JIT "
-                        + "mapping either, so no executable memory could be "
-                        + "claimed. This happens when Henge was opened from StikDebug's "
-                        + "app list, which attaches without Henge's script: open Henge "
-                        + "from the Home Screen and tap Turn On JIT. It also happens "
-                        + "inside another container app."
+            lastFailure = "除錯器已附加但未回應 JIT 記憶體請求，且此裝置不允許直接執行 MAP_JIT。若您是從 StikDebug 應用程式列表直接開啟 Henge（未帶入指令碼）或執行於容器 App 內，請改從主畫面開啟 Henge 並點選「開啟 JIT」。"
         }
         HengeLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
                               : "JIT prewarm FAILED -- StikDebug is not servicing traps")

@@ -79,7 +79,7 @@ import UserNotifications
         guard Self.isSupported, !active, session == nil else { return }
         var error: UnsafeMutablePointer<CChar>?
         guard let session = husk_rppairing_new(Self.hostName, &error) else {
-            fail(Self.take(error) ?? "Henge could not open its pairing port.")
+            fail(Self.take(error) ?? "Henge 無法開啟本機配對連接埠。")
             return
         }
         self.session = session
@@ -95,7 +95,7 @@ import UserNotifications
         beginBackground()
         deadline = Timer.scheduledTimer(withTimeInterval: Self.timeout, repeats: false) { _ in
             MainActor.assumeIsolated {
-                OnDevicePairing.shared.cancel(reason: "Pairing timed out. Try again when you are ready to pair from Settings.")
+                OnDevicePairing.shared.cancel(reason: "配對已逾時。請準備前往「設定」配對時再試一次。")
             }
         }
 
@@ -140,12 +140,12 @@ import UserNotifications
         log("code shown")
         #if compiler(>=6.2)
         if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
-            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Henge")
+            task.updateTitle("配對碼 \(pin)", subtitle: "請在此 \(Self.deviceKind) 輸入此驗證碼以與 Henge 配對")
             task.progress.completedUnitCount = 1
         }
         #endif
         if UIApplication.shared.applicationState != .active {
-            notify("Henge pairing code: \(pin)", body: "Enter this code on your \(Self.deviceKind) to finish pairing.")
+            notify("Henge 配對碼：\(pin)", body: "請在您的 \(Self.deviceKind) 輸入此驗證碼以完成配對。")
         }
     }
 
@@ -160,19 +160,19 @@ import UserNotifications
             do {
                 guard let data else { throw NSError(domain: "HengeJIT", code: 20) }
                 try JITCoordinator.shared.storeOnDevicePairing(data)
-                phase = .paired(device: device ?? "this \(Self.deviceKind)")
+                phase = .paired(device: device ?? "此 \(Self.deviceKind)")
                 log("paired")
                 if UIApplication.shared.applicationState != .active {
-                    notify("Paired with Henge", body: "Return to Henge to finish setting up JIT.")
+                    notify("已與 Henge 完成配對", body: "請返回 Henge 完成 JIT 設定。")
                 }
                 endBackground(success: true)
             } catch {
-                fail("Pairing finished, but Henge could not save the pairing file.")
+                fail("配對已完成，但 Henge 無法儲存配對檔案。")
             }
         case 2:
             endBackground(success: false)
         default:
-            fail(message.map { "Pairing failed: \($0)" } ?? "Pairing failed. Try again.")
+            fail(message.map { "配對失敗：\($0)" } ?? "配對失敗，請重試。")
         }
     }
 
@@ -224,8 +224,8 @@ import UserNotifications
         guard active else { return }
         log("advertising failed error=\(error)")
         fail(error == DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
-             ? "Henge needs Local Network access to pair. Allow it in Settings › Apps › Henge, then try again."
-             : "Henge could not announce itself on the local network. Check that Wi-Fi is on, then try again.")
+             ? "Henge 需要區域網路權限才能配對。請前往「設定 › App › Henge」允許區域網路後再試一次。"
+             : "Henge 無法在區域網路發佈配對服務，請確認已開啟 Wi-Fi 後再試一次。")
     }
 
     private func stopAdvertising() {
@@ -247,8 +247,7 @@ import UserNotifications
             MainActor.assumeIsolated {
                 let pairing = OnDevicePairing.shared
                 if pairing.continued == nil && pairing.active {
-                    pairing.cancel(reason: "iOS stopped Henge in the background before pairing finished. "
-                                         + "Try again, and pair from Settings straight away.")
+                    pairing.cancel(reason: "iOS 在配對完成前暫停了背景中的 Henge。請再試一次，並立即切換至「設定」進行配對。")
                 }
                 pairing.endGrace()
             }
@@ -272,8 +271,8 @@ import UserNotifications
             guard ok else { log("register refused"); backgroundLimited = true; return }
             registered = identifier
         }
-        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Pairing with Henge",
-                                                       subtitle: "Settings › Privacy & Security › Developer Mode")
+        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "正在與 Henge 配對",
+                                                       subtitle: "設定 › 隱私權與安全性 › 開發者模式")
         request.strategy = .fail
         do {
             try BGTaskScheduler.shared.submit(request)
@@ -290,13 +289,13 @@ import UserNotifications
         continued = task
         task.progress.totalUnitCount = 2
         if case .pin(let pin) = phase {
-            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Henge")
+            task.updateTitle("配對碼 \(pin)", subtitle: "請在此 \(Self.deviceKind) 輸入此驗證碼以與 Henge 配對")
             task.progress.completedUnitCount = 1
         }
         task.expirationHandler = {
             DispatchQueue.main.async {
                 OnDevicePairing.shared.continued = nil
-                OnDevicePairing.shared.cancel(reason: "iOS stopped the pairing in the background. Try again.")
+                OnDevicePairing.shared.cancel(reason: "iOS 在背景中止了配對作業，請再試一次。")
             }
         }
         log("continued-processing running")

@@ -10,9 +10,15 @@
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<string>zh-Hant</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hant</string>
+		<string>zh-TW</string>
+		<string>en</string>
+	</array>
 	<key>CFBundleDisplayName</key>
-	<string>Henge</string>
+	<string>iPac</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -37,7 +43,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>101</string>
+	<string>106</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>stikjit</string>
@@ -62,9 +68,9 @@
 		<string>_remotepairing._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Henge can use the volume buttons as the trackpad's mouse buttons. Receiving those presses needs the camera active; no video is recorded, saved or shown.</string>
+	<string>Henge 可將音量鍵作為觸控板的左右滑鼠鍵使用。攔截音量鍵事件需要啟用相機管線，但不會錄製、儲存或顯示任何畫面。</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Henge uses the local network to pair with this iPhone for JIT, without a computer.</string>
+	<string>Henge 需要使用區域網路與此裝置進行本機配對以啟用 JIT 加速（免用電腦）。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

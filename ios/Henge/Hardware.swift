@@ -45,10 +45,19 @@ enum Device {
     /// The choices for a Mac's memory, in GB.
     static let memoryChoices = 1...16
 
+    static var maxSafeCPUs: Int {
+        max(1, min(6, ProcessInfo.processInfo.activeProcessorCount - 1))
+    }
+
+    static var maxDisplayRefreshHz: Int {
+        let maxFPS = UIScreen.main.maximumFramesPerSecond
+        return maxFPS >= 100 ? 120 : 60
+    }
+
     /// What a choice risks on this device, if anything. An install always gets at least 2 GB (Installer.install).
     static func memoryNote(_ gb: Int) -> String? {
-        if gb < 4 { return "macOS has little room under 4 GB, so it can be very slow." }
-        if gb > suggestedRAMGB { return "More than \(suggestedRAMGB) GB is a lot for this \(name): iOS may close Henge when macOS gets busy." }
+        if gb < 4 { return "低於 4 GB 記憶體可能會讓 macOS 執行非常緩慢。" }
+        if gb > suggestedRAMGB { return "超過 \(suggestedRAMGB) GB 對這台 \(name) 負荷過高：macOS 忙碌時 iOS 可能會強制關閉 Henge。" }
         return nil
     }
 
@@ -61,7 +70,7 @@ enum Device {
         return major < 13
     }()
 
-    static let chipTooOldText = "macOS won't run on this \(name). Henge needs an A14 or M1 chip or newer."
+    static let chipTooOldText = "這台 \(name) 無法執行 macOS。Henge 需要 A14、M1 或更新的晶片。"
 
     /// What this device is called and the chip it has, for a Mac that reports its host
     /// (MacSettingsView → About This Mac). The table and the icon-snapping live in

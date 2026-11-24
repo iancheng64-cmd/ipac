@@ -1,99 +1,172 @@
 <p align="center">
-  <img src="docs/icon.png" width="120" height="120" alt="Henge">
+  <img src="docs/icon.png" width="120" height="120" alt="iPac">
 </p>
 
-<h1 align="center">Henge</h1>
+<h1 align="center">iPac</h1>
 
-<p align="center">macOS on your iPhone and iPad.</p>
+<p align="center">在 iPad 與 iPhone 上執行隨身 macOS（支援 USB-C 外接 SSD 隨插即用、跨機型硬體自動適配、完整繁體中文介面）</p>
+<p align="center">Portable macOS on iPad &amp; iPhone with USB-C external SSD plug-and-play &amp; Traditional Chinese UI — based on <a href="https://github.com/Leviidev/Henge">Henge</a>.</p>
 
 <p align="center">
-  <a href="#install">Install</a>
+  <a href="#安裝與下載">立即下載 / 安裝</a>
   ·
-  <a href="docs/architecture.md">How it works</a>
+  <a href="#外接-usb-c-ssd-隨身-macos">隨身 SSD 教學</a>
   ·
-  <a href="https://itslevii.dev">Website</a>
+  <a href="#從舊版-henge-覆蓋升級與-esign-簽名說明">覆蓋升級與 ESign 簽名</a>
   ·
-  <a href="https://github.com/Leviidev/Henge/releases">Releases</a>
+  <a href="docs/architecture.md">架構原理</a>
+  ·
+  <a href="https://github.com/iancheng64-cmd/ipac/releases">Releases</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Leviidev/Henge/releases"><img src="https://img.shields.io/github/downloads/Leviidev/Henge/total?style=flat-square&color=2E6BFF&labelColor=111111" alt="Downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Leviidev/Henge?style=flat-square&color=2E6BFF&labelColor=111111" alt="GPL-2.0-or-later"></a>
+  <a href="https://github.com/iancheng64-cmd/ipac/releases"><img src="https://img.shields.io/github/downloads/iancheng64-cmd/ipac/total?style=flat-square&color=2E6BFF&labelColor=111111" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/iancheng64-cmd/ipac?style=flat-square&color=2E6BFF&labelColor=111111" alt="GPL-2.0-or-later"></a>
 </p>
 
-Download macOS, install it on the device, and use it.
+---
 
-- **Own emulator** — iOS gives apps no hypervisor, so Henge runs the Mac's arm64 code through its own JIT, with its own MMU and devices. It doesn't use QEMU or Virtualization.framework.
-- **Installs on the device** — Henge downloads Apple's restore image and restores it the way a Mac does. No Mac needed, and nothing is decrypted or patched.
-- **Graphics** — macOS draws through a virtual GPU, and Henge replays its commands with Metal. Safari and Electron apps like Discord draw on it.
-- **Touch** — The screen is a Magic Trackpad 2: two fingers to scroll, and the Mac's own gestures work on it — three-finger swipes for Spaces and Mission Control and more. The volume buttons are its buttons: up clicks, down right-clicks, hold to drag. Esc, Tab, Control, Option and Command sit above the keyboard.
-- **Keyboard and mouse** — On iPad, a Magic Keyboard or a Bluetooth keyboard and mouse drive the Mac directly.
-- **External display** — During a Mac session, connect a display with a video-capable USB-C cable or a USB-C/HDMI dock. The mode activates automatically: the monitor shows the Mac, while the iPhone or iPad keeps its trackpad and keyboard controls. Disconnect to return the image to the device. The existing guest resolution is preserved. On iOS 17–26 the same happens through an older iOS route, not yet tried on hardware; outside a Mac session the display mirrors the device. USB-C video is user-confirmed on an iPhone 17 Pro running iOS 27 (development build 0.1/2).
-- **Sharing** — Copy and paste between macOS and the device, and a shared folder that shows up in Files and on the Mac.
-- **Fits the screen** — On iPad, a new Mac gets a screen the shape of the iPad's, so there are no black bars.
+**iPac** 是基於開源專案 [`Leviidev/Henge`](https://github.com/Leviidev/Henge) 深度強化與繁體中文化的分支版本。除了保留免電腦直接從 Apple CDN 下載並還原安裝 macOS、Metal GPU 渲染加速、Magic Trackpad 觸控手勢與外接鍵盤滑鼠直通等核心功能外，更專為 **隨身外接 USB-C SSD**、**跨多台 iPad 隨插即用**、**安全退出與白名單清除 SSD** 及 **完整繁體中文體驗** 而打造。
 
-On an iPhone 17 Pro, macOS reaches the lock screen in about 15 seconds. Discord installs, opens in about 15 seconds, logs in and sends messages.
+---
 
-## Install
+## 核心特色
 
-Sideload `Henge.ipa` from [Releases](https://github.com/Leviidev/Henge/releases) with SideStore or AltStore, or install `Henge.tipa` with TrollStore or TrollStore Lite. To get updates in SideStore or AltStore, add Henge's source, `https://raw.githubusercontent.com/Leviidev/Henge/main/repo.json`, or `https://itslevii.dev/repo.json` for all of Leviidev's apps. iOS or iPadOS 17 or later, on an A14 or M1 chip or newer. So far it's tested only on an iPhone 17 Pro: iPad support is new and hasn't run on a real iPad yet.
+### 外接 USB-C SSD 隨身 macOS
 
-- **JIT** is required: StikDebug, TrollStore (which stops at iOS 17.0), TrollStore Lite (which needs a jailbreak), a jailbreak on its own, or the StikJIT helper built into Henge (iOS 26 or later).
-- **Storage:** about 43 GB free for macOS Sequoia. That's 17 GB for the download, which you can delete afterwards, and 26 GB for the Mac.
-- **Memory:** a Mac gets 4, 6 or 8 GB. Sign Henge with the increased memory limit entitlement if your certificate has it.
+可將整套 macOS 虛擬機裝進一顆外接 USB-C SSD，帶著它插上另一台已安裝 iPac 的 iPad 就能直接開機使用（**無需搬移或複製 64 GB 映像檔到 iPad 本機**）。
 
-Then open the Install tab, pick macOS Sequoia 15.6.1, and keep Henge open with the device plugged in. Tahoe 26.6.2 and macOS 27.2 are offered too: both install and run on an iPhone 17 Pro, though Tahoe's first setup is slow and macOS 27 is the slowest (Safari's pages may stay blank on it). Sonoma 14.6.1 and Ventura 13.6 are smaller downloads (14.1 and 12.3 GB) for devices short on storage: they install, set up, and run Safari (both tested on an iPhone 17 Pro). Monterey isn't offered yet: it installs, but its desktop never appears.
+iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
-## Sharing with the Mac
+| 模式 | 安裝檔 / 暫存檔存放位置 | 完成後的 Mac 存放位置 | 適用情境 |
+| --- | --- | --- | --- |
+| **本機儲存（原始模式）** | 此 iPad / iPhone 本機 | 此 iPad / iPhone 本機 | 本機剩餘空間充足（≥ 43 GB） |
+| **外接安裝 → 存回本機** | 外接 USB-C SSD（`HengeInstall/`，完成後自動清除） | 此 iPad / iPhone 本機 | 本機空間較緊（例如 64 GB iPad），裝完即可拔除硬碟使用 |
+| **完整外接 SSD（隨身模式）** | 外接 USB-C SSD（`HengeInstall/`，完成後自動清除） | 外接 USB-C SSD（`HengeMachines/<UUID>/`） | **隨身帶著走**：幾乎不佔 iPad 本機空間，插到別台 iPad 透過「從外接硬碟開啟隨身 Mac…」即可開機 |
 
-Do this once for each Mac: open Terminal on the Mac, then in Henge open Details and tap **Type the Set Up Command**. Press Return on the Mac, and choose Allow when macOS asks about `henge-agent` and local networks. It needs the Mac's keyboard layout to be U.S.
+- **支援本機與外接雙向搬移**：在任何一台 Mac 的「設定」頁面中，可隨時「搬移至外接 SSD」或「搬回此 iPad 本機空間」（採用先複製到 `.moving` 暫存目錄並驗證 `disk.img` 後才切換的安全流程）。
+- **檔案系統建議（APFS vs exFAT）**：
+  - **推薦格式化為 APFS**：支援稀疏檔案（Sparse File），64 GB 虛擬磁碟實際僅佔已寫入大小（全新約 20–25 GB），建立磁碟瞬間完成。
+  - **exFAT**：不支援稀疏檔案，會直接寫滿 64 GB 且建立時需數分鐘，同時與 APFS 皆可正常跨裝置讀寫（不支援唯讀 NTFS）。
+- **本機緩衝保護**：虛擬機執行時需要的 `ram.tmp` 記憶體緩衝檔案固定建立於 iPad 內部高速 APFS（`Application Support/Machines/ram.tmp`），不會損耗或拖慢外接 USB-C 隨身碟。
 
-Then a Henge folder in the Mac's home folder is the same folder as Files › Henge › Shared. What you copy on the Mac is copied on the device too, and the paste button pastes from the device into the Mac.
+### 跨裝置硬體自動適配
 
-## Known limits
+將外接 SSD 插上不同世代／不同記憶體大小的 iPad 時，開啟「**隨身 SSD 自動適配**」（外接隨身 Mac 預設開啟），iPac 會保留同一套 macOS 系統身分、ECID 與所有個人資料，並於啟動時自動依據目前這台 iPad 調整：
 
-- Signing in to an Apple Account inside macOS fails with a verification error.
-- Graphics are tested on macOS's own apps, Chrome, Firefox, VS Code and Discord. Other apps may draw wrongly.
-- On macOS Sonoma, switching to a dynamic wallpaper (such as Sonoma) can stop the screen updating; opening any app brings it back. On Ventura, the Calendar icon in the Dock is missing its date.
-- For the first few minutes after you log in, macOS is busy starting up in the background, so apps open more slowly.
-- Only one Mac can start per launch. Quit Henge and open it again to start another, and to start one again after restarting or shutting down macOS.
-- iPadOS keeps some keyboard shortcuts for itself, such as Command-Tab.
-- It's emulation, so it runs slower than a real Mac.
+- **安全記憶體上限**：自動依照目前主機實體記憶體套用安全建議值（例如 16 GB 機型 → 8 GB、12 GB 機型 → 6 GB、8 GB 機型 → 4 GB、6 GB → 3 GB、4 GB → 2 GB），避免跨機造成 OOM 閃退。
+- **安全 CPU 核心上限**：自動依主機核心數限制安全可用核心數。
+- **螢幕比例與更新率**：自動配合當下這台 iPad 的螢幕長寬比（無黑邊）與 Retina 解析度設定，並於非 ProMotion（60 Hz）裝置自動鎖定最高 60 Hz 更新率。
 
-## Screenshots
+### 安全退出與白名單安全清除 SSD
 
-<table>
-  <tr>
-    <td align="center" colspan="3"><img src="Screenshots/ipad.jpg" alt="Discord on an iPad"><br><sub>iPad</sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="33%"><img src="Screenshots/macs.png" alt="Macs"><br><sub>Macs</sub></td>
-    <td align="center" width="33%"><img src="Screenshots/trackpad.png" alt="Trackpad"><br><sub>Trackpad</sub></td>
-    <td align="center" width="33%"><img src="Screenshots/install.png" alt="Install macOS"><br><sub>Install macOS</sub></td>
-  </tr>
-</table>
+為保護外接 SSD 內的個人資料不被破壞，iPac 提供兩套獨立機制（於「**設定**」、「**安裝**」與個別 Mac 設定頁面皆可操作）：
 
-<sub>Captured on a Mac: the app's own screens with sample data, at iPad and iPhone sizes, showing a frame from Henge's renderer.</sub>
+1. **安全退出 SSD（保留所有資料）**
+   - 先確認目前無執行中的 macOS 或磁碟搬移／匯出／安裝任務。
+   - 自動解除 iPadOS `Security-Scoped Bookmark` 沙盒檔案存取權限並清理掛載紀錄。
+   - **不會刪除** SSD 內的 macOS 映像與任何個人資料，之後插上同一台或別台 iPad 皆可隨時重新開啟。
+   - 若同顆硬碟同時掛載多台 Mac，單台退出最後一台時會自動釋放整顆 SSD 的沙盒鎖定。
+2. **清除 SSD 上的 iPac / Henge 資料（白名單機制）**
+   - 清除前先統計將釋放的容量與包含的 Mac / `HengeInstall/` 暫存數量並二次確認。
+   - 僅依固定白名單刪除已知虛擬機檔案（`disk.img`、`disk.img.hvsparse`、`AVPBooter.vmapple2.bin`、`auxiliary.bin`、`machine.json`、`installed`、`.installing`、`preview.jpg`、`resume.hsnap`、`resume.hsnap.part`、`restore/`）與 `HengeInstall/` 暫存目錄。
+   - **絕不刪除磁碟區根目錄與 SSD 內的其他個人資料夾／私人檔案**。
 
-## Building
+### 完整繁體中文介面與其他亮點
 
-To use Henge, install the [latest release](https://github.com/Leviidev/Henge/releases). Every change lands on `main` as it's made, so `main` can be unfinished between releases.
+- **全繁體中文介面**：包含首頁、安裝流程、硬體與儲存設定、單機詳情、即時續玩（Instant Resume）、獨立執行 Mac App（實驗性）、JIT 精靈與本機配對（iOS / iPadOS 27）、以及系統相機／區域網路權限說明（`CFBundleDevelopmentRegion` = `zh-Hant`）。
+- **剪貼簿與共享資料夾**：在 Mac 終端機執行自動輸入的安裝指令（`curl -s http://10.0.2.4/.henge/install | sh`）並按 Return 後，「檔案 › iPac / Henge › Shared」即同步至 Mac 家目錄的 `Henge` 資料夾；Mac 複製文字自動同步至 iPad，iPad 複製文字後點選上方控制列第三顆貼上鈕即可貼入 Mac。
+- **外接螢幕支援**：連接 USB-C / HDMI 顯示器會自動雙螢幕分工，外接螢幕顯示 macOS 畫面，iPad 保留觸控板與鍵盤控制。
 
-On a Mac with Xcode 27 or later and `xcodegen`. Henge takes StikJIT, on-device pairing, libslirp and glib from a built [Husk](https://github.com/Leviidev/Husk) checkout at `~/Documents/Coding/Husk` (set `HUSK` to use another path):
+---
+
+## 安裝與下載
+
+直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.3.0-build106.ipa`。
+
+### 系統需求
+
+- **系統版本**：iOS / iPadOS 17.0 或更新版本（內建 StikJIT 輔助程序與本機免電腦配對需 iOS / iPadOS 26 / 27 以上）。
+- **處理器**：Apple A14、M1 或更新晶片。
+- **JIT 權限（必備）**：支援 **內建 StikJIT**（iOS 26+ 搭配 LocalDevVPN）、**StikDebug**、**TrollStore**（iOS 14.0–17.0）或 **越獄環境（Dopamine）**。
+- **儲存空間**：若安裝於本機，建議保留約 **43 GB**（以 macOS Sequoia 為例：約 16 GB 安裝映像檔下載後可自動刪除，成品約佔 24–26 GB）；改用「外接安裝 → 存回本機」或「完整外接 SSD」模式可大幅減少 iPad 本機空間需求。
+
+---
+
+## 從舊版 Henge 覆蓋升級與 ESign 簽名說明
+
+為讓原本正在使用 Henge（包含官方原版與 Build 103 等舊版）的使用者**直接無痛升級而不遺失已安裝的 macOS 虛擬機**，iPac 刻意保留了相容的 Bundle ID（`com.henge.app`）、偏好設定鍵值（`UserDefaults`）與 `machines.json` 格式（所有新增欄位皆為選填且向下相容）。
+
+### 1. 我可以直接覆蓋安裝替換嗎？舊 Mac 資料會不見嗎？
+
+- **可以，只要滿足以下兩個條件，直接覆蓋安裝就不會遺失資料：**
+  1. **絕對不要先刪除舊版 Henge App**：刪除 iOS App 會連帶清空沙盒 `Application Support/Machines` 與 `Documents/` 內所有本機虛擬機檔案（存放於外接 SSD 內的資料則不受刪 App 影響）。
+  2. **必須使用與舊版相同的簽名方式／開發者憑證（相同 Team ID + `com.henge.app`）覆蓋安裝**。
+- 若之前是用 AltStore / SideStore / 個人 Apple ID 簽名，請繼續用同一個 Apple ID 的同款工具直接覆蓋安裝（iPad 主畫面顯示名稱會更新為 **iPac**，所有 Mac、設定與快取完整保留）。
+
+### 2. 我可以使用 ESign（輕鬆簽）來簽名嗎？會不會有不相容問題？
+
+**可以使用 ESign 簽名並安裝**，但請務必注意以下四個相容性條件：
+
+1. **憑證必須包含 `get-task-allow`（Development / 開發者憑證）**：
+   - iOS / iPadOS 執行 macOS 模擬器需要透過除錯器啟用 **JIT（動態程式碼執行權限）**；一般企業簽名或僅有 Ad-Hoc Distribution（無 `get-task-allow`）的簽名檔**無法**被 StikDebug 或內建 StikJIT 附加除錯器，開啟 Mac 時會無法啟用 JIT。
+   - **解法**：使用開發者 p12 / mobileprovision 憑證，並在 ESign 簽名設定確認保留或注入 `get-task-allow`。
+2. **務必保留 App Extension（`PlugIns/HengeJITHelper.appex`）**：
+   - 在 ESign 匯入並簽名時，**不要勾選「移除所有 PlugIns / Extensions」**，否則「內建 StikJIT 免電腦開啟 JIT」功能會失敗並要求改用外部 StikDebug App（`HengeJITHelper.appex` 已與主程式統一為 Build `106` 確保 ESign/iOS 驗證通過）。
+3. **關於 Bundle ID 與舊資料覆蓋**：
+   - 保持預設 Bundle ID `com.henge.app` 簽名，但若舊版 Henge 原先是由不同 Team ID（例如個人免費簽名 / SideStore）簽署、本次改用不同來源的 ESign 企業或個人憑證，**iOS 不允許不同 Team ID 直接覆蓋同一顆 App**，可能會安裝失敗或需要重新賦予同一個 Bundle ID / 先匯出 Mac 備份後重新安裝。
+   - 若打算換新憑證或同時並存安裝：請先把原本的 Mac **「搬移至外接 SSD」** 或用 **「匯出打包」** 保存並移出 `Documents/Exports/`，安裝新簽名版後再從「＋ › 從外接硬碟開啟隨身 Mac…」或匯入資料夾無損載入。
+4. **記憶體權限（`increased-memory-limit` / `extended-virtual-addressing`）差異**：
+   - 個人或一般 ESign 憑證的描述檔（Provisioning Profile）若未授權 `com.apple.developer.kernel.increased-memory-limit` 與 `com.apple.developer.kernel.extended-virtual-addressing` 權限，ESign 簽名後這些權限會被自動剔除。
+   - **影響**：App 本身**仍可正常啟動執行**，但無法突破系統單 App 記憶體上限；iPac 會自動偵測並在需要時改以本機 APFS 儲存空間檔案映射（`ram.tmp`）充當虛擬機記憶體緩衝（效能會略低於持有完整 Entitlements 的簽名版）。
+
+---
+
+## 常見使用教學
+
+### 啟用 JIT 加速（無電腦或配合 StikDebug）
+
+- **iOS / iPadOS 26 及以上（內建 StikJIT）**：進入「設定 JIT」精靈選擇本機配對（iOS 27+）或匯入電腦產生的 `pairingFile.plist`，從 App Store 安裝並開啟 **LocalDevVPN** 保持本機迴路連線，點選「檢查環境」→「啟用 JIT」即可。
+- **使用 StikDebug**：若外部透過 StikDebug 啟動，請點 iPac 畫面上的「開啟 JIT」由 iPac 帶入專用腳本跳轉，避免從 StikDebug App 列表直接開啟。
+- **TrollStore / Dopamine**：iOS 14–17.0 或已越獄環境可直接使用對應模式，免 VPN 啟用 JIT。
+
+### 在 iPad 與虛擬 macOS 間共享剪貼簿與檔案
+
+1. 啟動虛擬 Mac 後，在 Mac 內開啟「終端機（Terminal）」，確認 macOS 輸入法目前為 **英文（ABC）**。
+2. 點選 iPac 控制列「**詳細資訊（i） › 剪貼簿與資料夾共享 › 自動輸入設定指令**」，回到 Mac 終端機按下 **Return** 執行並允許本地網路權限。
+3. 完成後：
+   - iPad 的「檔案 › iPac（或 Henge）› Shared」資料夾即對應 Mac 家目錄內的 `Henge` 資料夾。
+   - 在 Mac 複製純文字會自動同步到 iPad 剪貼簿；在 iPad 複製純文字後，點選上方控制列第三顆 **貼上按鈕**，iPac 會直接將文字貼到 Mac 游標所在處（系統按鈕免跳權限詢問）。
+
+---
+
+## 從原始碼自行建置
+
+需要安裝 **Xcode（iOS 27 SDK / Xcode 27 以上建議）** 與 `xcodegen`；引擎所需第三方相依套件（StikJIT、libslirp、glib、rppairing 等）來自 [Husk](https://github.com/Leviidev/Husk)（預設路徑 `~/Documents/Coding/Husk`，可透過 `HUSK=/path/to/Husk` 環境變數指定）：
 
 ```bash
 ios/scripts/fetch_deps.sh
 tools/build_ios_restore.sh
 make ios-lib
-ios/scripts/package_ipa.sh
+HENGE_IPA_OUT=./iPac-v0.3.0-build106.ipa ios/scripts/package_ipa.sh
 ```
 
-That produces `~/Desktop/Henge.ipa`, and `package_ipa.sh --trollstore` writes `Henge.tipa`.
+- 若使用免費個人 Apple Team 帳號簽名，建置時可加上 `HENGE_ENTITLEMENTS=Henge/Henge.personal.entitlements`。
+- 本機開發測試 Mac 版引擎與單元測試可執行 `make` 與 `make test`。
 
-`make` builds the engine for the Mac, `build/hengevm`, and `make test` runs its tests.
+---
 
-## Licence
+## 已知限制
 
-GPL-2.0-or-later. Henge compiles in usbmuxd (GPLv2 or GPLv3) and code from Husk (GPL-2.0-or-later), so the shipped binary is a combined GPL work. It cannot go on the App Store. See [docs/licensing.md](docs/licensing.md).
+- 在虛擬 macOS 內登入 Apple Account 會出現驗證失敗錯誤。
+- 虛擬 macOS 系統重開機或關機後，由於 iOS 行程只能預熱保留單次 JIT 記憶區，請從多工上滑完全關閉 iPac 再重新開啟後啟動下一台 Mac。
+- iPadOS 會保留部分系統全域快捷鍵（例如 `⌘ + Tab`）。
+- 因指令轉譯模擬架構限制，執行速度低於原生 Apple Silicon Mac。
 
-macOS and the Mac's boot ROM are Apple's and aren't part of Henge. Henge downloads both from Apple when you install.
+---
+
+## 授權條款與版權說明
+
+本專案依據 **GNU General Public License v2.0 or later（[GPL-2.0-or-later](LICENSE)）** 開源授權釋出，衍生自 [`Leviidev/Henge`](https://github.com/Leviidev/Henge)。因編譯包含 `usbmuxd` 與來自 `Husk` 的 GPL 程式碼，發行執行檔亦屬 GPL 複合著作，請參閱 [docs/licensing.md](docs/licensing.md)。
+
+**Apple 版權聲明**：本儲存庫與釋出的 IPA 安裝檔**皆未包含**任何 Apple macOS 作業系統映像檔與開機韌體（`AVPBooter.vmapple2.bin`）；所有系統檔案皆於使用者實際安裝時由裝置直接向 Apple 官方 CDN 下載取得。

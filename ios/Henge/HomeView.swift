@@ -6,9 +6,12 @@ struct HomeView: View {
     @ObservedObject private var machines = Machines.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @ObservedObject private var installer = Installer.shared
+    @ObservedObject private var extStorage = ExternalInstallStorage.shared
+    private enum FolderPicker { case attachExternal, importCopy }
+
     @Binding var running: VirtualMac?
     @Binding var tab: RootView.Tab
-    @State private var picking = false
+    @State private var folderPicker: FolderPicker?
     @State private var jitReady = JITBootstrap.ready
     @State private var chosen: UUID?
     @State private var showMacApps = false
@@ -26,11 +29,21 @@ struct HomeView: View {
                 VStack(spacing: 14) {
                     notices
                     if let mac {
-                        MacHero(mac: mac, jitReady: jitReady, start: { running = mac }, turnOnJIT: { jit.enable() },
-                                jitNote: jitReady ? nil : (JITBootstrap.lastFailure ?? jit.automaticDescription))
+                        MacHero(
+                            mac: mac,
+                            jitReady: jitReady,
+                            start: { running = mac },
+                            turnOnJIT: { jit.enable() },
+                            refreshDrive: {
+                                extStorage.refreshConnection()
+                                machines.refreshExternalMachines()
+                            },
+                            jitNote: jitReady ? nil : (JITBootstrap.lastFailure ?? jit.automaticDescription)
+                        )
                         HStack(spacing: 10) {
-                            FactTile(title: "Disk", value: ByteText.string(UInt64(max(mac.bytesUsed, 0))))
-                            FactTile(title: "Last used", value: mac.lastUsedText)
+                            FactTile(title: "磁碟用量", value: mac.isAvailable ? ByteText.string(UInt64(max(mac.bytesUsed, 0))) : "未連接")
+                            FactTile(title: "儲存位置", value: mac.isExternal ? (mac.externalDriveName ?? "外接硬碟") : "此 \(Device.name)")
+                            FactTile(title: "上次使用", value: mac.lastUsedText)
                         }
                         others(besides: mac)
                     } else {
@@ -42,28 +55,59 @@ struct HomeView: View {
                 .deskColumn()
             }
             .background(Desk.page)
-            .navigationTitle("Henge")
+            .navigationTitle("iPac")
             .navigationDestination(for: VirtualMac.self) { MacSettingsView(mac: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("Install macOS…") { tab = .install }
-                        Button("Bring in a Mac from a computer…") { picking = true }
-                        if macApps { Button("Mac Apps…") { showMacApps = true } }
+                        Button("安裝 macOS…") { tab = .install }
+                        Button("從外接硬碟開啟隨身 Mac…") { folderPicker = .attachExternal }
+                        Button("從電腦匯入 Mac（複製到本機）…") { folderPicker = .importCopy }
+                        if macApps { Button("Mac App（實驗性）…") { showMacApps = true } }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Add a Mac")
+                    .accessibilityLabel("新增或開啟 Mac")
                 }
             }
-            .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
-                if case let .success(url) = result { machines.importFolder(url) }
+            .fileImporter(
+                isPresented: Binding(get: { folderPicker != nil }, set: { if !$0 { folderPicker = nil } }),
+                allowedContentTypes: [.folder]
+            ) { result in
+                let activePicker = folderPicker
+                folderPicker = nil
+                if case let .success(url) = result {
+                    switch activePicker {
+                    case .attachExternal:
+                        if machines.attachExternalDrive(url) > 0,
+                           let ext = machines.all.last(where: { $0.isExternal && $0.isAvailable }) {
+                            chosen = ext.id
+                        }
+                    case .importCopy, .none:
+                        machines.importFolder(url)
+                    }
+                }
             }
             .sheet(isPresented: $showMacApps) { MacAppsView() }
             .task {
+                var ticks = 0
                 while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
                     jitReady = JITBootstrap.ready
+                    ticks += 1
+                    if ticks % 3 == 0, machines.all.contains(where: { $0.isExternal && !$0.isAvailable }) {
+                        extStorage.refreshConnection()
+                        machines.refreshExternalMachines()
+                    }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+            .onAppear {
+                extStorage.refreshConnection()
+                machines.refreshExternalMachines()
+            }
+            .onChange(of: machines.all) { _, list in
+                if let chosen, !list.contains(where: { $0.id == chosen }) {
+                    self.chosen = nil
                 }
             }
         }
@@ -75,15 +119,29 @@ struct HomeView: View {
         }
         if installer.busy {
             Button { tab = .install } label: {
-                NoticeRow(symbol: "arrow.down.circle.fill", text: "Installing \(installer.machineName)…", trailing: "See")
+                NoticeRow(symbol: "arrow.down.circle.fill", text: "正在安裝「\(installer.machineName)」…", trailing: "查看進度")
             }
         }
         if let name = machines.importing {
             NoticeRow(symbol: "square.and.arrow.down.fill",
-                      text: machines.unpacked > 0 ? String(format: "Unpacking %@'s disk… %.0f%%", name, machines.unpacked * 100) : "Bringing in \(name)…")
+                      text: machines.unpacked > 0 ? String(format: "正在解包「%@」磁碟… %.0f%%", name, machines.unpacked * 100) : "正在匯入「\(name)」…")
+        }
+        if let name = machines.moving {
+            NoticeRow(symbol: "externaldrive.fill",
+                      text: String(format: "正在搬移「%@」… %.0f%%", name, machines.moved * 100))
+        }
+        if let name = machines.deleting {
+            NoticeRow(symbol: "trash.fill", text: "正在安全清除「\(name)」…", tint: Desk.warn)
+        }
+        if let notice = machines.statusNotice {
+            Button { machines.statusNotice = nil } label: {
+                NoticeRow(symbol: "checkmark.circle.fill", text: notice, trailing: "知道了", tint: Desk.good)
+            }
         }
         if let error = machines.lastError {
-            NoticeRow(symbol: "exclamationmark.triangle.fill", text: error, tint: Desk.bad)
+            Button { machines.lastError = nil } label: {
+                NoticeRow(symbol: "exclamationmark.triangle.fill", text: error, trailing: "關閉", tint: Desk.bad)
+            }
         }
     }
 
@@ -95,12 +153,14 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 190)
                 .background(Desk.raised.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            Text("No Mac yet").font(.system(size: 24, weight: .bold))
-            Text("Install macOS on this \(Device.name), or bring in a Mac made on a computer.")
+            Text("尚未有虛擬 Mac").font(.system(size: 24, weight: .bold))
+            Text("可直接在此 \(Device.name)（或外接 USB-C SSD）安裝 macOS，或是掛載別台外接 SSD 裡的隨身系統。")
                 .font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
-            Button("Install macOS") { tab = .install }.buttonStyle(DeskButtonStyle())
-            Button("Bring in a Mac") { picking = true }
+            Button("安裝 macOS") { tab = .install }.buttonStyle(DeskButtonStyle())
+            Button("從外接硬碟開啟隨身 Mac") { folderPicker = .attachExternal }
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+            Button("從電腦匯入 Mac（複製到本機）") { folderPicker = .importCopy }
+                .font(.system(size: 14, weight: .medium)).foregroundStyle(Desk.dim)
         }
         .padding(14)
         .deskCard(radius: 30)
@@ -109,14 +169,14 @@ struct HomeView: View {
     @ViewBuilder private func others(besides shown: VirtualMac) -> some View {
         let rest = machines.all.filter { $0.id != shown.id }
         if !rest.isEmpty {
-            DeskHeading("Other Macs")
+            DeskHeading("其他 Mac")
             VStack(spacing: 0) {
                 ForEach(rest) { other in
                     Button { chosen = other.id } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(other.name).font(.system(size: 16, weight: .medium)).foregroundStyle(Desk.text)
-                                Text(other.summary).font(.system(size: 13)).foregroundStyle(Desk.dim)
+                                Text(other.summary).font(.system(size: 13)).foregroundStyle(other.isExternal && !other.isAvailable ? Desk.bad : Desk.dim)
                             }
                             Spacer()
                             Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.faint)
@@ -135,20 +195,31 @@ struct HomeView: View {
 
 extension VirtualMac {
     var bytesUsed: Int64 {
-        Int64((try? disk.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+        guard isAvailable else { return 0 }
+        let values = try? disk.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey])
+        if let allocated = values?.totalFileAllocatedSize, allocated > 0 {
+            return Int64(allocated)
+        }
+        if let size = values?.fileSize, size > 0 {
+            return Int64(size)
+        }
+        return 0
     }
 
     var lastUsedText: String {
-        guard let lastUsed else { return "Never" }
-        if Calendar.current.isDateInToday(lastUsed) { return "Today" }
-        if Calendar.current.isDateInYesterday(lastUsed) { return "Yesterday" }
+        guard let lastUsed else { return "從未使用" }
+        if Calendar.current.isDateInToday(lastUsed) { return "今天" }
+        if Calendar.current.isDateInYesterday(lastUsed) { return "昨天" }
         return lastUsed.formatted(.dateTime.month(.abbreviated).day())
     }
 
     var summary: String {
         var parts: [String] = []
         if let osName { parts.append(osName) }
-        parts.append("\(ramMB / 1024) GB")
+        parts.append(adaptsToHost ? "自動 \(effectiveRAMMB / 1024) GB" : "\(ramMB / 1024) GB")
+        if isExternal {
+            parts.append(isAvailable ? "外接（\(externalDriveName ?? "硬碟")）" : "硬碟未連接")
+        }
         return parts.joined(separator: " · ")
     }
 }
@@ -159,6 +230,7 @@ private struct MacHero: View {
     let jitReady: Bool
     let start: () -> Void
     let turnOnJIT: () -> Void
+    let refreshDrive: () -> Void
     let jitNote: String?
     @AppStorage("henge.cpus") private var cpus = 4
 
@@ -170,7 +242,15 @@ private struct MacHero: View {
                     HStack {
                         Text(mac.name).font(.system(size: 24, weight: .bold)).foregroundStyle(Desk.text).lineLimit(1)
                         Spacer()
-                        Text(jitReady ? "JIT on" : "JIT off")
+                        if mac.isExternal {
+                            Text(mac.isAvailable ? "外接 SSD" : "未連接")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(mac.isAvailable ? Desk.accentLight : Desk.bad)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 5)
+                                .background((mac.isAvailable ? Desk.accentLight : Desk.bad).opacity(0.13), in: Capsule())
+                        }
+                        Text(jitReady ? "JIT 已開啟" : "JIT 未開啟")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(jitReady ? Desk.good : Desk.warn)
                             .padding(.horizontal, 11)
@@ -180,9 +260,10 @@ private struct MacHero: View {
                     }
                     .padding(.top, 15)
                     .padding(.horizontal, 5)
-                    Text("\(mac.summary) · \(cpus) CPUs")
+                    let shownCPUs = mac.adaptsToHost ? min(max(1, cpus), Device.maxSafeCPUs) : min(max(1, cpus), 6)
+                    Text("\(mac.summary) · \(shownCPUs) 核心")
                         .font(.system(size: 15))
-                        .foregroundStyle(Desk.dim)
+                        .foregroundStyle(mac.isExternal && !mac.isAvailable ? Desk.bad : Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 5)
                         .padding(.top, 3)
@@ -190,15 +271,29 @@ private struct MacHero: View {
             }
             .buttonStyle(.plain)
             if jitReady {
-                Button(action: start) {
-                    if InstantResume.enabled && InstantResume.hasSave(for: mac) {
-                        Label("Resume", systemImage: "play.fill")
-                    } else {
-                        Label("Start", systemImage: "play.fill")
+                if mac.isExternal && !mac.isAvailable {
+                    Text("請插上「\(mac.externalDriveName ?? "外接硬碟")」以啟動這台 Mac，或點選上方資訊欄重新連接資料夾。")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Desk.bad)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 5)
+                        .padding(.top, 10)
+                    Button(action: refreshDrive) {
+                        Label("重新偵測「\(mac.externalDriveName ?? "外接硬碟")」", systemImage: "externaldrive.badge.exclamationmark")
                     }
+                    .buttonStyle(DeskButtonStyle(enabled: false))
+                    .padding(.top, 12)
+                } else {
+                    Button(action: start) {
+                        if InstantResume.enabled && InstantResume.hasSave(for: mac) {
+                            Label("繼續執行", systemImage: "play.fill")
+                        } else {
+                            Label("啟動", systemImage: "play.fill")
+                        }
+                    }
+                    .buttonStyle(DeskButtonStyle())
+                    .padding(.top, 15)
                 }
-                .buttonStyle(DeskButtonStyle())
-                .padding(.top, 15)
             } else {
                 if let jitNote {
                     Text(jitNote).font(.system(size: 13)).foregroundStyle(Desk.dim)
@@ -206,7 +301,7 @@ private struct MacHero: View {
                         .padding(.horizontal, 5)
                         .padding(.top, 10)
                 }
-                Button("Turn On JIT", action: turnOnJIT)
+                Button("開啟 JIT", action: turnOnJIT)
                     .buttonStyle(DeskButtonStyle())
                     .padding(.top, 15)
             }
@@ -218,12 +313,12 @@ private struct MacHero: View {
     @ViewBuilder private var preview: some View {
         ZStack {
             Desk.raised.opacity(0.5)
-            if let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path) {
+            if mac.isAvailable, let image = UIImage(contentsOfFile: MacPreview.file(for: mac).path) {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
-                Image(systemName: "macwindow.on.rectangle")
+                Image(systemName: mac.isExternal && !mac.isAvailable ? "externaldrive.badge.exclamationmark" : "macwindow.on.rectangle")
                     .font(.system(size: 46, weight: .light))
-                    .foregroundStyle(Desk.faint)
+                    .foregroundStyle(mac.isExternal && !mac.isAvailable ? Desk.bad : Desk.faint)
             }
         }
         .aspectRatio(mac.aspect, contentMode: .fit)

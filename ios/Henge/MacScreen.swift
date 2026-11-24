@@ -494,7 +494,7 @@ struct MacKeyRow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Desk.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
-            .accessibilityLabel("Hide keyboard")
+            .accessibilityLabel("隱藏鍵盤")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
@@ -633,7 +633,7 @@ struct MacMenuButton: UIViewRepresentable {
     static func elements() -> [UIMenuElement] {
         guard let raw = henge_tl_app_main_menu(),
               let items = Unmanaged<NSArray>.fromOpaque(raw).takeRetainedValue() as? [[String: Any]], !items.isEmpty else {
-            return [UIAction(title: "This app has no menus", attributes: .disabled) { _ in }]
+            return [UIAction(title: "此程式沒有選單列項目", attributes: .disabled) { _ in }]
         }
         return build(items)
     }
@@ -676,7 +676,7 @@ final class MacScreenHub {
 struct MacAppScreen: View {
     let app: MacApp
     @Environment(\.dismiss) private var dismiss
-    @State private var status = "Loading…"
+    @State private var status = "載入中…"
     @State private var started = false
     @State private var trackpad = UserDefaults.standard.object(forKey: MacScreenUIView.trackpadKey) as? Bool ?? true
     private let screen = MacAppScreen.screenSize()
@@ -734,10 +734,10 @@ struct MacAppScreen: View {
         }.value
         if let failure {
             HengeLog.log("macapps", "could not load \(app.name): \(failure)")
-            status = "Could not open it: \(failure)"
+            status = "無法開啟：\(failure)"
             return
         }
-        status = "Starting…"
+        status = "正在啟動…"
         henge_tl_app_run_soon { rc in
             HengeLog.log("macapps", "the app's main returned \(rc)")
         }

@@ -21,6 +21,7 @@ struct SessionView: View {
     @State private var started = Date()
     @State private var thermalState = ProcessInfo.processInfo.thermalState
     @State private var bootRAM: UInt64 = 0 /* what the Mac was started with, which a save is for */
+    @State private var bootCPUs: Int = 4
     @AppStorage("henge.cpus") private var cpus = 4
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
     @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
@@ -66,8 +67,8 @@ struct SessionView: View {
                         if display.isExternal && state != 2 {
                             VStack(spacing: 8) {
                                 Image(systemName: "display").font(.largeTitle)
-                                Text("Mac on external display").font(.headline)
-                                Text("Use the trackpad, keyboard or a connected mouse.")
+                                Text("Mac 畫面已輸出至外接螢幕").font(.headline)
+                                Text("請使用觸控螢幕、鍵盤或外接滑鼠操作。")
                                     .font(.subheadline)
                             }
                             .foregroundStyle(.white)
@@ -101,7 +102,7 @@ struct SessionView: View {
                         floatingControls(layout)
                     }
                     if pointerRefused && !showRevealHint {
-                        Label("Make Henge full screen to use the trackpad or mouse as the Mac's", systemImage: "cursorarrow.rays")
+                        Label("請將 Henge 設為全螢幕，才能將觸控板或滑鼠交給虛擬 Mac 使用", systemImage: "cursorarrow.rays")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -111,7 +112,7 @@ struct SessionView: View {
                             .allowsHitTesting(false)
                     }
                     if showRevealHint {
-                        Label("Tap with four fingers to show the controls", systemImage: "hand.tap")
+                        Label("四指同時輕點螢幕即可顯示控制列", systemImage: "hand.tap")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -121,7 +122,7 @@ struct SessionView: View {
                             .allowsHitTesting(false)
                     }
                     if showWallpaperTip && !showRevealHint && !pointerRefused {
-                        Label("For more speed, give this Mac a still wallpaper and set its screen saver to Never in System Settings.", systemImage: "speedometer")
+                        Label("提示：在 Mac「系統設定」改用靜態純色桌布並將螢幕保護程式設為「永不」，可大幅提升流暢度。", systemImage: "speedometer")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .multilineTextAlignment(.leading)
@@ -165,10 +166,10 @@ struct SessionView: View {
         .statusBarHidden(zoomed || Device.isPad)
         .persistentSystemOverlays(.hidden)
         .sheet(isPresented: $showDetails) { details }
-        .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
-            Button("Shut Down", role: .destructive) { finish() }
+        .confirmationDialog("確定要強制關閉「\(mac.name)」嗎？", isPresented: $confirmStop, titleVisibility: .visible) {
+            Button("強制關機", role: .destructive) { finish() }
         } message: {
-            Text("This turns the Mac off at once. Anything not saved on it is lost.")
+            Text("這會立即切斷虛擬 Mac 電源，任何尚未儲存的檔案或進度將會遺失。")
         }
         .onChange(of: zoomed) { on in
             zoomFollowing?.cancel()
@@ -185,7 +186,7 @@ struct SessionView: View {
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
             if phase == .inactive { InstantResume.pause() }
-            if phase == .background && bootRAM > 0 { InstantResume.suspend(mac, ramMB: bootRAM, cpus: cpus) }
+            if phase == .background && bootRAM > 0 { InstantResume.suspend(mac, ramMB: bootRAM, cpus: bootCPUs) }
         }
         .onChange(of: showDetails) { showing in
             if showing { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
@@ -288,17 +289,17 @@ struct SessionView: View {
     @ViewBuilder private func uprightControls(_ layout: Layout) -> some View {
         if !typing && !controlsHidden {
             HStack {
-                tool("eye.slash", "Hide controls") { hideControls() }
+                tool("eye.slash", "隱藏控制列") { hideControls() }
                 Spacer()
-                tool("keyboard", "Keyboard") { typing = true }
+                tool("keyboard", "鍵盤") { typing = true }
                 Spacer()
                 pasteTool
                 Spacer()
-                tool("plus.magnifyingglass", "Zoom in") { zoomed = true }
+                tool("plus.magnifyingglass", "放大檢視") { zoomed = true }
                 Spacer()
-                tool("info.circle", "Details") { showDetails = true }
+                tool("info.circle", "詳細資訊") { showDetails = true }
                 Spacer()
-                tool("power", "Shut down", tint: Desk.bad) { stopTapped() }
+                tool("power", "關機", tint: Desk.bad) { stopTapped() }
             }
             .padding(.horizontal, 22)
             .frame(width: layout.pad.width, height: 54)
@@ -316,22 +317,22 @@ struct SessionView: View {
             ZStack {
                 Trackpad()
                 if compact {
-                    Text("Trackpad").font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
+                    Text("觸控板").font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
                 } else {
                     VStack(spacing: 6) {
-                        hint("Drag", "to move")
-                        hint("Tap", "to click")
-                        hint("Hold, then drag", "to grab")
-                        hint("Two fingers", "to scroll")
+                        hint("滑動", "移動游標")
+                        hint("輕點", "左鍵點擊")
+                        hint("按住再滑動", "拖曳視窗或選取")
+                        hint("雙指滑動", "捲動頁面")
                     }
                     .allowsHitTesting(false)
                 }
             }
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
             HStack(spacing: 0) {
-                MouseButton(title: "Click", button: 0)
+                MouseButton(title: "左鍵點擊", button: 0)
                 Rectangle().fill(Desk.hairline).frame(width: 0.5)
-                MouseButton(title: "Right-click", button: 1)
+                MouseButton(title: "右鍵點擊", button: 1)
             }
             .frame(height: compact ? 50 : 70)
         }
@@ -384,13 +385,13 @@ struct SessionView: View {
         let landscape = layout.touch.width > layout.touch.height
         let top = layout.insets.top + (landscape ? 8 : 6)
         let pill = HStack(spacing: 4) {
-            tool("eye.slash", "Hide controls", tint: .white) { hideControls() }
-            tool("keyboard", "Keyboard", tint: .white) { typing.toggle() }
+            tool("eye.slash", "隱藏控制列", tint: .white) { hideControls() }
+            tool("keyboard", "鍵盤", tint: .white) { typing.toggle() }
             pasteTool
-            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "Zoom out" : "Zoom in", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
-            tool("info.circle", "Details", tint: .white) { showDetails = true }
+            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "恢復檢視" : "放大檢視", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+            tool("info.circle", "詳細資訊", tint: .white) { showDetails = true }
             Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
-            tool("power", "Shut down", tint: Desk.bad) { stopTapped() }
+            tool("power", "關機", tint: Desk.bad) { stopTapped() }
         }
         .padding(.horizontal, 8)
         .frame(height: 50)
@@ -460,9 +461,9 @@ struct SessionView: View {
 
     private func errorCard(_ text: String, _ layout: Layout) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("This Mac could not start").font(.system(size: 17, weight: .semibold))
+            Text("這台 Mac 無法啟動").font(.system(size: 17, weight: .semibold))
             Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim)
-            Button("Close") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+            Button("關閉") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
         }
         .padding(18)
         .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
@@ -472,10 +473,10 @@ struct SessionView: View {
 
     private var phase: String {
         switch state {
-        case 0: return error == nil ? "Starting…" : "Not started"
-        case 1: return userCode ? "macOS is running" : "Booting"
-        case 3: return "Finishing shutdown…"
-        default: return "Stopped (\(String(cString: henge_vm_exit_reason())))"
+        case 0: return error == nil ? "正在啟動…" : "尚未啟動"
+        case 1: return userCode ? "macOS 執行中" : "正在開機"
+        case 3: return "正在完成關機…"
+        default: return "已停止（\(String(cString: henge_vm_exit_reason()))）"
         }
     }
 
@@ -483,36 +484,37 @@ struct SessionView: View {
         NavigationStack {
             List {
                 Section(phase) {
-                    LabeledContent("CPUs on", value: "\(cpusOn) of \(cpus)")
-                    LabeledContent("Temperature", value: Self.thermalLabel(thermalState))
-                    LabeledContent("Translated blocks", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
-                    LabeledContent("Network frames", value: "\(framesOut) out, \(framesIn) in")
-                    LabeledContent("Up", value: "\(Int(Date().timeIntervalSince(started))) s")
+                    LabeledContent("儲存位置", value: mac.isExternal ? "外接 SSD（\(mac.externalDriveName ?? "外接硬碟")）" : "此 \(Device.name)")
+                    LabeledContent("運行中 CPU", value: "\(cpusOn)／\(bootCPUs)")
+                    LabeledContent("裝置溫度", value: Self.thermalLabel(thermalState))
+                    LabeledContent("指令轉譯率", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
+                    LabeledContent("網路封包", value: "送出 \(framesOut)，接收 \(framesIn)")
+                    LabeledContent("已運行時間", value: "\(Int(Date().timeIntervalSince(started))) 秒")
                 }
-                Section("Display") {
-                    Toggle("Color matching", isOn: $matchScreenColors)
-                    LabeledContent("Brightness", value: "\(Int(screenBrightness * 100))%")
+                Section("顯示器") {
+                    Toggle("螢幕色彩同步", isOn: $matchScreenColors)
+                    LabeledContent("畫面亮度", value: "\(Int(screenBrightness * 100))%")
                     Slider(value: $screenBrightness, in: 0.4...1)
-                    Text("Brightness dims only the Mac's screen.")
+                    Text("只調整虛擬 Mac 畫面的顯示亮度。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Pointer") {
-                    Picker("Size", selection: $cursorScale) {
+                Section("指標") {
+                    Picker("指標大小", selection: $cursorScale) {
                         Text("1×").tag(1)
                         Text("2×").tag(2)
                         Text("3×").tag(3)
                     }
                     .pickerStyle(.segmented)
-                    Toggle("Sharp edges", isOn: $sharpCursor)
-                    LabeledContent("Scroll speed", value: String(format: "%.1f×", scrollSpeed))
+                    Toggle("銳利邊緣", isOn: $sharpCursor)
+                    LabeledContent("捲動速度", value: String(format: "%.1f×", scrollSpeed))
                     Slider(value: $scrollSpeed, in: 0.1...1.5)
-                    Text("The Mac supplies a small pointer image. Enlarging it can look blurry; 1× is the sharpest on an iPad. Scroll speed changes apply immediately.")
+                    Text("macOS 提供的指標影像較小，在 iPad 上設為 1× 最銳利；捲動速度會立即生效。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Sharing") {
-                    LabeledContent("Clipboard and folder", value: helperRunning ? "On" : "Not set up")
+                Section("剪貼簿與資料夾共享") {
+                    LabeledContent("狀態", value: helperRunning ? "已啟用" : "尚未設定")
                     if !helperRunning {
-                        Button("Type the Set Up Command") {
+                        Button("自動輸入設定指令") {
                             showDetails = false
                             Task {
                                 try? await Task.sleep(nanoseconds: 600_000_000)
@@ -521,29 +523,29 @@ struct SessionView: View {
                         }
                     }
                     Text(helperRunning
-                         ? "Put files in Files, Henge, Shared to see them in the Henge folder in this Mac's home folder. What you copy on the Mac is copied here too, and the paste button pastes from here into the Mac."
-                         : "Once for each Mac: open Terminal on the Mac, tap this, then press Return. When macOS asks about henge-agent and local networks, choose Allow. It types \(Sharing.setUpCommand) and needs the Mac's keyboard layout to be U.S.")
+                         ? "將檔案放到「檔案 › Henge › Shared」即可在 Mac 家目錄的「Henge」資料夾存取。在 Mac 複製純文字會自動同步至此，iPad 複製後請點上方第三顆貼上鈕傳給 Mac。"
+                         : "每台 Mac 只需設定一次：先開啟 Mac 裡的終端機，點按上方按鈕後按 Return 執行；若彈出區域網路權限詢問請選允許（輸入時 Mac 輸入法需為英文）。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Lighter macOS") {
-                    Button("Type the Lighter macOS Command") {
+                Section("輕量化 macOS") {
+                    Button("輸入輕量化設定指令") {
                         showDetails = false
                         Task {
                             try? await Task.sleep(nanoseconds: 600_000_000)
                             await Keys.typeSlowly(Sharing.lightenCommand)
                         }
                     }
-                    Button("Type the Undo Command") {
+                    Button("輸入還原指令") {
                         showDetails = false
                         Task {
                             try? await Task.sleep(nanoseconds: 600_000_000)
                             await Keys.typeSlowly(Sharing.unlightenCommand)
                         }
                     }
-                    Text("Less drawing for the emulated CPUs: window and Dock animations, desktop widgets, the screen saver and a moving wallpaper go. Open Terminal on the Mac, tap the button and press Return, then log out and back in. Also turn on Reduce Motion and Reduce Transparency in the Mac's System Settings, Accessibility. Undo puts it back, apart from the wallpaper. Needs the Mac's keyboard layout to be U.S.")
+                    Text("減少模擬 CPU 的繪圖負荷：關閉視窗動畫、Dock 動畫、桌面小工具與動態桌布。請先開啟 Mac 終端機，點按按鈕後按 Return 執行，並登出再登入即可生效（建議另於系統設定開啟「減少動態效果」與「減少透明度」）。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Log") {
+                Section("日誌") {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(log.suffix(30).enumerated()), id: \.offset) { _, line in
                             Text(line).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
@@ -551,7 +553,7 @@ struct SessionView: View {
                     }
                 }
             }
-            .navigationTitle("Details")
+            .navigationTitle("詳細資訊")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -560,11 +562,11 @@ struct SessionView: View {
 
     private static func thermalLabel(_ state: ProcessInfo.ThermalState) -> String {
         switch state {
-        case .nominal: return "Normal"
-        case .fair: return "Warm"
-        case .serious: return "Hot — performance reduced"
-        case .critical: return "Critical"
-        @unknown default: return "Unknown"
+        case .nominal: return "正常"
+        case .fair: return "微溫"
+        case .serious: return "過熱 — 已自動降頻"
+        case .critical: return "嚴重過熱"
+        @unknown default: return "未知"
         }
     }
 
@@ -586,12 +588,16 @@ struct SessionView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !Task.isCancelled else { return }
+        if mac.isExternal && !Machines.shared.ensureExternalAccess(for: mac) {
+            error = "外接 SSD（\(mac.externalDriveName ?? "外接硬碟")）未連接，請插上後再試。"
+            return
+        }
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
         let ram = GuestMemory.prepare(mac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
-            error = "There is not room for this Mac's memory: it needs a few GB of free storage."
+            error = "此 \(Device.name) 本機可用空間不足，無法配置虛擬 Mac 記憶體（請至少保留數 GB 空間）。"
             return
         }
         var buffer = [CChar](repeating: 0, count: 256)
@@ -613,12 +619,16 @@ struct SessionView: View {
         } else {
             henge_vm_set_identity(nil, nil, nil)
         }
+        let activeCPUs = mac.adaptsToHost ? min(max(1, cpus), Device.maxSafeCPUs) : min(max(1, cpus), 6)
+        if activeCPUs != cpus {
+            HengeLog.log("session", "adaptive CPU count: \(activeCPUs) of requested \(cpus) for host")
+        }
         var rc: Int32 = -1
-        if InstantResume.enabled, let at = InstantResume.saved(for: mac, ramMB: ram, cpus: cpus) {
+        if InstantResume.enabled, let at = InstantResume.saved(for: mac, ramMB: ram, cpus: activeCPUs) {
             HengeLog.log("resume", "picking up the Mac saved \(Int(Date().timeIntervalSince(at))) s ago")
             let t0 = Date()
-            rc = henge_vm_resume(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus),
-                                 InstantResume.file(for: mac).path, InstantResume.ident(for: mac, ramMB: ram, cpus: cpus), &buffer, buffer.count)
+            rc = henge_vm_resume(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(activeCPUs),
+                                 InstantResume.file(for: mac).path, InstantResume.ident(for: mac, ramMB: ram, cpus: activeCPUs), &buffer, buffer.count)
             if rc == 0 {
                 HengeLog.log("resume", String(format: "resumed in %.1f s", Date().timeIntervalSince(t0)))
             } else {
@@ -628,13 +638,14 @@ struct SessionView: View {
         }
         InstantResume.discard(for: mac) /* used or out of date: the disk moves on from here */
         if rc != 0 {
-            rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
+            rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(activeCPUs), &buffer, buffer.count)
         }
         if rc != 0 {
             error = String(cString: buffer)
             return
         }
         bootRAM = ram
+        bootCPUs = activeCPUs
         started = Date()
         var used = mac
         used.lastUsed = started
@@ -672,6 +683,7 @@ struct SessionView: View {
                 StickyKeys.shared.releaseAll()
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
+                InstantResume.discard(for: mac)
                 UIApplication.shared.isIdleTimerDisabled = false
                 HengeLog.log("session", "showing stopped Mac: \(String(cString: henge_vm_exit_reason()))")
                 if henge_vm_exit_outcome() == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {

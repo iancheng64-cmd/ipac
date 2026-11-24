@@ -49,13 +49,13 @@ struct RootView: View {
         ZStack {
             TabView(selection: $tab) {
                 HomeView(running: $running, tab: $tab)
-                    .tabItem { Label("Macs", systemImage: "macwindow") }
+                    .tabItem { Label("我的 Mac", systemImage: "macwindow") }
                     .tag(Tab.macs)
                 InstallView()
-                    .tabItem { Label("Install", systemImage: "arrow.down.circle") }
+                    .tabItem { Label("安裝", systemImage: "arrow.down.circle") }
                     .tag(Tab.install)
                 SettingsView()
-                    .tabItem { Label("Settings", systemImage: "gearshape") }
+                    .tabItem { Label("設定", systemImage: "gearshape") }
                     .tag(Tab.settings)
             }
             .tint(Desk.accentLight)
@@ -70,6 +70,9 @@ struct RootView: View {
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             machines.collectImports()
+            ExternalInstallStorage.shared.refreshConnection()
+            machines.refreshExternalMachines()
+            ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused()
             jit.enableAtLaunchIfAsked()
             // StikDebug can launch Henge before it attaches. A task also runs
             // on the first appearance, when there may be no phase change.

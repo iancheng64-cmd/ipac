@@ -546,12 +546,14 @@ static void henge_ios_hold_high(void)
     }
 }
 
-static void henge_ios_release_high_hold(void)
+HENGE_EXPORT void henge_ios_release_high_hold(void)
 {
     if (g_high_hold_given) return;
     for (int i = 0; i < 3; i++)
         if (g_high_hold[i]) {
-            vm_deallocate(mach_task_self(), g_high_hold[i], (vm_size_t)g_high_parts[i].bytes);
+            kern_return_t kr = vm_deallocate(mach_task_self(), g_high_hold[i], (vm_size_t)g_high_parts[i].bytes);
+            HENGE_LOG("released high hold at %#llx (%llu GB): %s", (unsigned long long)g_high_parts[i].at,
+                      (unsigned long long)(g_high_parts[i].bytes >> 30), mach_error_string(kr));
             g_high_hold[i] = 0;
         }
 }
@@ -999,6 +1001,7 @@ HengeDualMapping henge_ios_jit_allocate(size_t bytes)
     return henge_ios_jit_allocate_real(bytes);
 }
 int henge_ios_take_high_room(void **base, size_t *bytes) { (void)base, (void)bytes; return 0; }
+void henge_ios_release_high_hold(void) {}
 bool henge_ios_jit_prewarm(size_t bytes) { (void)bytes; return false; }
 bool henge_ios_jit_prewarm_self(size_t bytes) { (void)bytes; return false; }
 bool henge_ios_jit_reserve_bottom(size_t end) { (void)end; return true; }

@@ -3,7 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<string>zh-Hant</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hant</string>
+		<string>zh-TW</string>
+		<string>en</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Henge JIT Helper</string>
 	<key>CFBundleExecutable</key>
@@ -19,7 +25,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>101</string>
+	<string>106</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing._tcp</string>
@@ -41,7 +47,7 @@
 		<string>HengeJITHelperHandler</string>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Henge's JIT helper looks up the port this device's pairing service listens on.</string>
+	<string>Henge JIT 輔助程序需要尋找此裝置本機配對服務的連線埠。</string>
 	<key>XPCService</key>
 	<dict>
 		<key>ServiceType</key>

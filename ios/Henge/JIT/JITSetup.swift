@@ -16,11 +16,11 @@ enum JITMethod: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .automatic: return "Automatic"
+        case .automatic: return "自動偵測"
         case .stikDebug: return "StikDebug"
         case .trollStore: return "TrollStore"
-        case .jailbreak: return "Jailbreak (Dopamine)"
-        case .builtIn: return "Built-in StikJIT"
+        case .jailbreak: return "越獄（Dopamine）"
+        case .builtIn: return "內建 StikJIT"
         }
     }
 }
@@ -68,7 +68,7 @@ enum JITPairingFileStore {
               let identifier = dictionary["identifier"] as? String, !identifier.isEmpty else {
             throw NSError(domain: "HengeJIT", code: 10,
                           userInfo: [NSLocalizedDescriptionKey:
-                            "That is not a remote pairing file. Make one with the StikDebug pairing-file guide and try again."])
+                            "這不是有效的遠端配對檔案（RPPairing plist）。請依 StikDebug 指南產生配對檔後再試。"])
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
@@ -130,12 +130,12 @@ final class JITCoordinator: ObservableObject {
 
     var automaticDescription: String {
         switch resolvedMethod {
-        case .stikDebug: return "StikDebug is installed, so Henge will open it."
-        case .trollStore: return "TrollStore is installed, so Henge will ask it to enable JIT."
-        case .jailbreak: return "This device is jailbroken, so JIT comes from the jailbreak's Allow JIT in Apps setting."
+        case .stikDebug: return "已偵測到 StikDebug，Henge 會開啟它來啟用 JIT。"
+        case .trollStore: return "已偵測到 TrollStore，Henge 會透過它啟用 JIT。"
+        case .jailbreak: return "此裝置已越獄，請於 Dopamine 開啟「Allow JIT in Apps」。"
         default: return hasPairing
-            ? "Henge will use its paired built-in helper."
-            : "StikDebug, TrollStore and a jailbreak were not found, so Henge will use its built-in helper."
+            ? "Henge 將使用已配對的內建 JIT 輔助程序。"
+            : "找不到 StikDebug、TrollStore 或越獄環境，將使用 Henge 內建 JIT 輔助程序。"
         }
     }
 
@@ -222,19 +222,19 @@ final class JITCoordinator: ObservableObject {
             } else if JITBootstrap.requestTrollStoreAttach() {
                 awaitTrollStore()
             } else {
-                error = "StikDebug is not installed. Install it, or set up Built-in StikJIT."
+                error = "未安裝 StikDebug。請先安裝 StikDebug，或設定使用內建 StikJIT。"
                 showSetup = true
             }
         case .trollStore:
             if JITBootstrap.requestTrollStoreAttach() {
                 awaitTrollStore()
             } else {
-                error = "TrollStore could not be opened. Install Henge through TrollStore, or choose another method."
+                error = "無法開啟 TrollStore。請透過 TrollStore 安裝 Henge，或改用其他 JIT 方式。"
                 showSetup = true
             }
         case .jailbreak:
             // Nothing to ask: a jailbreak marks an app as debugged as it opens, if it has been told to. Say what to turn on.
-            error = "Turn on Allow JIT in Apps in Dopamine's settings, then open Henge again."
+            error = "請在 Dopamine 設定中開啟「Allow JIT in Apps」，然後重新開啟 Henge。"
             showSetup = true
         case .builtIn:
             guard HengeBuiltInJIT.isAvailable, hasPairing else {
@@ -251,20 +251,19 @@ final class JITCoordinator: ObservableObject {
     /// it never comes -- TrollStore only answers enable-jit once its URL Scheme setting is on.
     private func awaitTrollStore() {
         busy = true
-        status = "Waiting for TrollStore to enable JIT…"
+        status = "正在等待 TrollStore 啟用 JIT…"
         log("waiting for TrollStore's attach")
         _ = Self.waitForDebugger(timeout: 60) { [weak self] attached in
             guard let self else { return }
             busy = false
             if attached {
-                status = "JIT is on."
+                status = "JIT 已開啟。"
                 error = nil
                 attachGeneration += 1
                 log("TrollStore enabled JIT")
             } else {
                 status = nil
-                error = "TrollStore did not enable JIT. In TrollStore's Settings turn on URL Scheme, and make sure Henge was "
-                      + "installed through TrollStore (or is signed with get-task-allow)."
+                error = "TrollStore 未在 1 分鐘內啟用 JIT。請在 TrollStore 設定中開啟「URL Scheme」，並確認 Henge 係由 TrollStore 安裝（或包含 get-task-allow）。"
                 log("TrollStore did not enable JIT within a minute")
                 showSetup = true
             }
@@ -275,19 +274,19 @@ final class JITCoordinator: ObservableObject {
     /// so watch CS_DEBUGGED the same way awaitTrollStore does.
     private func awaitStikDebug() {
         busy = true
-        status = "Waiting for StikDebug to attach…"
+        status = "正在等待 StikDebug 附加啟用…"
         log("waiting for StikDebug's attach")
         _ = Self.waitForDebugger(timeout: 60) { [weak self] attached in
             guard let self else { return }
             busy = false
             if attached {
-                status = "JIT is on."
+                status = "JIT 已開啟。"
                 error = nil
                 attachGeneration += 1
                 log("StikDebug attached")
             } else {
                 status = nil
-                error = "StikDebug did not attach within a minute. Make sure it's installed and try again."
+                error = "StikDebug 未在 1 分鐘內附加完成。請確認已安裝並匯入配對檔後重試。"
                 log("StikDebug did not attach within a minute")
                 showSetup = true
             }
@@ -301,7 +300,7 @@ final class JITCoordinator: ObservableObject {
             refreshPairingStatus()
             method = .builtIn
             prepared = false
-            status = "Pairing file imported."
+            status = "配對檔案已匯入。"
             error = nil
             log("pairing file imported")
         } catch {
@@ -315,7 +314,7 @@ final class JITCoordinator: ObservableObject {
         refreshPairingStatus()
         method = .builtIn
         prepared = false
-        status = "Paired on this device."
+        status = "已完成本機配對。"
         error = nil
     }
 
@@ -326,7 +325,7 @@ final class JITCoordinator: ObservableObject {
         error = nil
         connectionProblem = nil
         advice = nil
-        if attempt == 1 { status = "Checking LocalDevVPN and the Developer Disk Image…" }
+        if attempt == 1 { status = "正在檢查 LocalDevVPN 與 Developer Disk Image…" }
         RemotePairingPortDiscovery.resolve { port in
             HengeBuiltInJIT.send(.prepare(pairingData: pairing, rsdPort: port)) { [weak self] result in
                 guard let self else { return }
@@ -355,7 +354,7 @@ final class JITCoordinator: ObservableObject {
     func enableBuiltIn(attempt: Int = 1) {
         guard let pairing = builtInPairing() else { return }
         guard let script = JITBootstrap.scriptBase64 else {
-            error = "Henge's JIT script is missing from this installation. Reinstall Henge."
+            error = "此安裝檔缺少 Henge JIT 指令碼，請重新安裝 Henge。"
             return
         }
 
@@ -364,7 +363,7 @@ final class JITCoordinator: ObservableObject {
         error = nil
         connectionProblem = nil
         advice = nil
-        if attempt == 1 { status = "Starting Henge's JIT helper…" }
+        if attempt == 1 { status = "正在啟動 Henge 內建 JIT 輔助程序…" }
         log("enabling JIT with the built-in helper" + (attempt > 1 ? " (attempt \(attempt))" : ""))
         var readiness: Timer?
         var finished = false
@@ -379,7 +378,7 @@ final class JITCoordinator: ObservableObject {
                 log("built-in JIT failed: \(failure)")
                 showSetup = true
             } else {
-                status = "JIT is on."
+                status = "JIT 已開啟。"
                 error = nil
                 attachGeneration += 1
                 log("built-in helper attached")
@@ -390,10 +389,9 @@ final class JITCoordinator: ObservableObject {
             HengeBuiltInJIT.send(
                 .enable(targetPID: getpid(), pairingData: pairing, scriptBase64: script, rsdPort: port),
                 started: { [weak self] in
-                    if attempt == 1 { self?.status = "Waiting for the helper to attach…" }
+                    if attempt == 1 { self?.status = "正在等待 JIT 輔助程序附加…" }
                     readiness = Self.waitForDebugger { attached in
-                        finish(attached ? nil : "The helper did not attach within 90 seconds. "
-                                              + "Check that LocalDevVPN is connected, then try again.")
+                        finish(attached ? nil : "輔助程序未在 90 秒內附加。請確認 LocalDevVPN 已連線後再試一次。")
                     }
                 },
                 completion: { [weak self] result in
@@ -424,7 +422,7 @@ final class JITCoordinator: ObservableObject {
     func resetDDI() {
         busy = true
         error = nil
-        status = "Resetting the Developer Disk Image cache…"
+        status = "正在重設 Developer Disk Image 快取…"
         HengeBuiltInJIT.send(.resetDDI) { [weak self] result in
             guard let self else { return }
             busy = false
@@ -446,7 +444,7 @@ final class JITCoordinator: ObservableObject {
             return nil
         }
         guard let pairing = try? JITPairingFileStore.data() else {
-            error = "Pair this device or import its pairing file first."
+            error = "請先在這台裝置進行本機配對，或匯入電腦產生的配對檔案。"
             return nil
         }
         return pairing
@@ -520,7 +518,7 @@ enum LocalDevVPN {
         }
         return false
     }
-    static var actionTitle: String { isInstalled ? "Connect LocalDevVPN" : "Get LocalDevVPN" }
+    static var actionTitle: String { isInstalled ? "連接 LocalDevVPN" : "下載 LocalDevVPN" }
 
     @MainActor static func open() {
         let installed = isInstalled

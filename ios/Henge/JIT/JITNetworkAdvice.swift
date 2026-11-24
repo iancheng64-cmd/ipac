@@ -68,19 +68,15 @@ enum JITNetworkAdvice {
         guard let problem = JITConnectionProblem(helperMessage: helperMessage) else { return nil }
         if problem == .pairing {
             return JITAdvice(
-                message: "This device closed the connection, which usually means it no longer accepts "
-                       + "Henge's pairing. Pair again, and check that LocalDevVPN is connected.",
+                message: "裝置端關閉了連線，通常是已不接受這份配對檔案。請重新配對，並確認已開啟 LocalDevVPN。",
                 actions: [.pairAgain, .connectLocalDevVPN])
         }
         guard situation == .cellularOnly else {
-            return JITAdvice(message: "Henge couldn't reach this device. Connect LocalDevVPN, then try again.",
+            return JITAdvice(message: "Henge 無法連線到此裝置。請先開啟 LocalDevVPN 後再試一次。",
                              actions: [.connectLocalDevVPN])
         }
         return JITAdvice(
-            message: "LocalDevVPN can show Connected while iOS still sends Henge's connection over cellular. "
-                   + "Turn Cellular Data off in Control Center, wait 2 seconds, then turn it back on. "
-                   + "Or join any Wi-Fi once; a hotspot works. "
-                   + "Keep LocalDevVPN connected, turn off other VPNs such as Tailscale, then try again.",
+            message: "僅使用行動網路時，即使 LocalDevVPN 顯示已連線，iOS 仍可能誤將流量送到行動網路。請在控制中心關閉「行動數據」2 秒後重開，或暫時連上任一 Wi-Fi（熱點亦可）。保持 LocalDevVPN 連線並關閉 Tailscale 等其他 VPN 後重試。",
             actions: [.connectLocalDevVPN])
     }
 }
@@ -100,7 +96,7 @@ enum JITRetryPolicy {
 
     /// Shown while waiting to try attempt `nextAttempt` (the first retry is attempt 2).
     static func statusText(nextAttempt: Int) -> String {
-        "Retrying over LocalDevVPN (\(nextAttempt) of \(maxAttempts))…"
+        "正透過 LocalDevVPN 重新嘗試（第 \(nextAttempt)/\(maxAttempts) 次）…"
     }
 
     static func decision(situation: NetworkSituation, problem: JITConnectionProblem, attempt: Int) -> JITRetryDecision {

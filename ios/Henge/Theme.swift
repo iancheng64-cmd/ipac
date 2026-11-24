@@ -35,9 +35,9 @@ enum DeskAppearance: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .system: return "System"
-        case .light: return "Light"
-        case .dark: return "Dark"
+        case .system: return "跟隨系統"
+        case .light: return "淺色"
+        case .dark: return "深色"
         }
     }
     var style: UIUserInterfaceStyle {
@@ -160,12 +160,16 @@ enum MacPreview {
 
     /// Off the main thread.
     static func save(for mac: VirtualMac) {
+        guard mac.isAvailable else { return }
         let url = file(for: mac), height = Int(640 / mac.aspect)
         Task.detached(priority: .utility) { write(to: url, height: height) }
     }
 
     /// Before the machine stops, while there is still a screen to read.
-    static func saveNow(for mac: VirtualMac) { write(to: file(for: mac), height: Int(640 / mac.aspect)) }
+    static func saveNow(for mac: VirtualMac) {
+        guard mac.isAvailable else { return }
+        write(to: file(for: mac), height: Int(640 / mac.aspect))
+    }
 
     private static func write(to url: URL, height: Int) {
         guard let image = capture(width: 640, height: height), let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.8) else { return }

@@ -217,7 +217,7 @@ struct ModifierRow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Desk.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
-            .accessibilityLabel("Hide keyboard")
+            .accessibilityLabel("隱藏鍵盤")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 6)

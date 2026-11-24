@@ -32,10 +32,11 @@ for f in "$APP/Henge" "$APP/henge-jit.js" "$APP/PlugIns/HengeJITHelper.appex/Hen
 done
 [ $rc -eq 0 ] || { echo "==> bundle is not installable; refusing to package" >&2; exit 1; }
 
-STAGE="$(mktemp -d "$DD/stage.XXXXXX")"
+STAGE="$(mktemp -d /tmp/henge_stage.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Payload"
 cp -R "$APP" "$STAGE/Payload/"
+xattr -cr "$STAGE" 2>/dev/null || true
 ENT="$STAGE/entitlements.plist"
 # HENGE_ENTITLEMENTS picks another file, as for xcodebuild (Henge/Henge.personal.entitlements for a free team).
 cp "$IOS/${HENGE_ENTITLEMENTS:-Henge/Henge.entitlements}" "$ENT"
@@ -51,7 +52,7 @@ if [ -n "$(find "$STAGE" -iname 'AVPBooter*' -o -iname 'AVPSEPBooter*')" ]; then
   echo "Apple's boot ROM is in the app: not packaging." >&2
   exit 1
 fi
-sign() { codesign --force --sign - --timestamp=none "$@"; }
+sign() { xattr -cr "${@[-1]}" 2>/dev/null || true; codesign --force --sign - --timestamp=none "$@"; }
 for fw in "$SAPP"/Frameworks/*.framework; do [ -d "$fw" ] && sign "$fw"; done
 for ex in "$SAPP"/PlugIns/*.appex; do [ -d "$ex" ] && sign "$ex"; done
 sign --entitlements "$ENT" "$SAPP"
