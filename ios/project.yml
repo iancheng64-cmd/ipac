@@ -150,6 +150,7 @@ targets:
             plutil -insert CFBundleSupportedPlatforms.0 -string iPhoneOS "$PLIST"
           fi
           if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] && [ "$CODE_SIGNING_ALLOWED" != "NO" ]; then
+            xattr -cr "$DST" 2>/dev/null || true
             codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$DST"
           fi
         basedOnDependencyAnalysis: false
