@@ -27,6 +27,8 @@ struct InstallView: View {
     @State private var pickingExternalFolder = false
     @AppStorage("henge.cpus") private var cpus = 4
 
+    private var clampedCPUs: Int { min(max(1, cpus), Device.maxCPUCount) }
+
     private var dialogTitle: String {
         switch activeDialog {
         case .deleteDownload:
@@ -331,11 +333,17 @@ struct InstallView: View {
                     .padding(.bottom, 10)
             }
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
-            Stepper(value: $cpus, in: 1...Device.maxCPUCount) {
+            Stepper(
+                value: Binding(
+                    get: { clampedCPUs },
+                    set: { cpus = $0 }
+                ),
+                in: 1...Device.maxCPUCount
+            ) {
                 HStack {
                     Text("CPU 核心數").font(.system(size: 16))
                     Spacer()
-                    Text("\(cpus) 核心").font(.system(size: 16, weight: .semibold))
+                    Text("\(clampedCPUs) 核心").font(.system(size: 16, weight: .semibold))
                 }
             }
             .padding(.horizontal, 17)
@@ -349,7 +357,7 @@ struct InstallView: View {
         .deskCard()
 
         Button(Installer.haveImage(release) ? "立即安裝" : "下載並安裝") {
-            installer.start(release, name: name.isEmpty ? "Mac" : name, ramMB: ramGB * 1024, cpus: cpus, keepImage: !deleteAfter)
+            installer.start(release, name: name.isEmpty ? "Mac" : name, ramMB: ramGB * 1024, cpus: clampedCPUs, keepImage: !deleteAfter)
         }
         .buttonStyle(DeskButtonStyle(enabled: canInstall))
         .disabled(!canInstall)

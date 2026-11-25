@@ -14,7 +14,6 @@ struct MacSettingsView: View {
     @State private var activeDialog: ManageDialog?
     @State private var movingExport = false
     @State private var pickingReconnect = false
-    @State private var showMoreRam = false
     @State private var removed = false
 
     init(mac: VirtualMac) { _mac = State(initialValue: mac) }
@@ -80,7 +79,10 @@ struct MacSettingsView: View {
 
                 DeskHeading("記憶體")
                 VStack(alignment: .leading, spacing: 12) {
-                    let currentRAMGB = max(1, (mac.adaptsToHost ? mac.effectiveRAMMB : mac.ramMB) / 1024)
+                    let currentRAMGB = min(
+                        max(Device.memoryChoices.lowerBound, (mac.adaptsToHost ? mac.effectiveRAMMB : mac.ramMB) / 1024),
+                        Device.memoryChoices.upperBound
+                    )
                     HStack(alignment: .firstTextBaseline) {
                         Text(mac.adaptsToHost ? "自動 · \(currentRAMGB) GB" : "\(currentRAMGB) GB")
                             .font(.system(size: 26, weight: .bold))
@@ -130,10 +132,10 @@ struct MacSettingsView: View {
                     }
 
                     Button {
-                        showMoreRam = true
+                        MoreRamCoordinator.shared.showSheet = true
                     } label: {
                         Label(
-                            Entitlements.increasedMemory ? "檢查大記憶體權限（內建 GetMoreRam）…" : "使用內建 GetMoreRam 解鎖大記憶體…",
+                            Entitlements.increasedMemory ? "最大記憶體已自動啟用 · 查看狀態" : "一鍵自動解鎖最大記憶體…",
                             systemImage: "memorychip"
                         )
                         .font(.system(size: 14, weight: .semibold))
@@ -337,9 +339,6 @@ struct MacSettingsView: View {
         .navigationTitle(mac.name)
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear(perform: save)
-        .sheet(isPresented: $showMoreRam) {
-            MoreRamView()
-        }
         .fileImporter(isPresented: $pickingReconnect, allowedContentTypes: [.folder]) { result in
             if case let .success(url) = result {
                 if machines.reconnectExternal(mac, to: url),

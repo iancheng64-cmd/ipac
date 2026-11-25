@@ -5,6 +5,7 @@ import StosSign_API
 import StosSign_Auth
 import StosSign_Common
 import SwiftUI
+import UIKit
 
 enum MoreRamError: LocalizedError {
     case invalidServerURL
@@ -123,22 +124,48 @@ final class MoreRamAnisette {
     private static let clientInfo = "<iMac18,3> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
     private static let userAgent = "AuthKit/1 (Macintosh; OS X 27.0) (com.apple.akd/1.0)"
 
-    private let serverURL: URL
+    private let baseURL: URL
     private let logHandler: (String) -> Void
 
     init(serverURL: URL, logHandler: @escaping (String) -> Void) {
-        self.serverURL = serverURL
+        self.baseURL = Self.normalizeBaseURL(serverURL)
         self.logHandler = logHandler
     }
 
+    static func normalizeBaseURL(_ url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        if path.lowercased().hasSuffix("/v3") {
+            path.removeLast(3)
+            while path.hasSuffix("/") { path.removeLast() }
+        }
+        components.path = path
+        components.query = nil
+        components.fragment = nil
+        return components.url ?? url
+    }
+
     func getAnisetteData() async throws -> AnisetteData {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
+        let urlSession = URLSession(configuration: config)
+        defer { urlSession.finishTasksAndInvalidate() }
+
         if let identifier = MoreRamKeychain.shared.identifier,
            let adiPb = MoreRamKeychain.shared.adiPb,
-           !identifier.isEmpty,
+           let decoded = Data(base64Encoded: identifier),
+           decoded.count == 16,
            !adiPb.isEmpty {
-            return try await fetchV3Headers(identifier: identifier, adiPb: adiPb, allowReprovision: true)
+            return try await fetchV3Headers(
+                identifier: identifier,
+                adiPb: adiPb,
+                allowReprovision: true,
+                session: urlSession
+            )
         }
-        return try await provisionAndFetch()
+        return try await provisionAndFetch(session: urlSession)
     }
 
     private func ensureClientIdentity() throws -> (identifier: String, mdLu: String, deviceId: String) {
@@ -169,7 +196,7 @@ final class MoreRamAnisette {
         return (identifier, mdLu, uuid.uuidString.uppercased())
     }
 
-    private func provisionAndFetch() async throws -> AnisetteData {
+    private func provisionAndFetch(session: URLSession) async throws -> AnisetteData {
         let identity = try ensureClientIdentity()
         logHandler("正在向 Apple 查詢 Anisette 佈署網址…")
 
@@ -180,7 +207,7 @@ final class MoreRamAnisette {
         )
         lookupRequest.httpMethod = "GET"
 
-        let (lookupData, _) = try await URLSession.shared.data(for: lookupRequest)
+        let (lookupData, _) = try await session.data(for: lookupRequest)
         guard let plist = try? PropertyListSerialization.propertyList(from: lookupData, format: nil) as? [String: [String: Any]],
               let startStr = plist["urls"]?["midStartProvisioning"] as? String,
               let startURL = URL(string: startStr),
@@ -190,14 +217,14 @@ final class MoreRamAnisette {
         }
 
         logHandler("正在透過 Anisette v3 WebSocket 註冊裝置…")
-        let endpoint = webSocketURL(from: serverURL.appendingPathComponent("v3").appendingPathComponent("provisioning_session"))
+        let endpoint = webSocketURL(from: baseURL.appendingPathComponent("v3").appendingPathComponent("provisioning_session"))
         var wsRequest = URLRequest(url: endpoint)
-        wsRequest.timeoutInterval = 10
-        let socket = URLSession.shared.webSocketTask(with: wsRequest)
+        wsRequest.timeoutInterval = 12
+        let socket = session.webSocketTask(with: wsRequest)
         socket.resume()
         defer { socket.cancel(with: .normalClosure, reason: nil) }
 
-        while true {
+        for _ in 0..<20 {
             let message = try await socket.receive()
             guard case .string(let text) = message else {
                 throw MoreRamError.provisioningFailed("伺服器回傳了非文字 WebSocket 訊框。")
@@ -212,13 +239,13 @@ final class MoreRamAnisette {
             case "GiveIdentifier":
                 try await sendJSON(["identifier": identity.identifier], on: socket)
             case "GiveStartProvisioningData":
-                let spim = try await fetchStartProvisioning(url: startURL, identity: identity)
+                let spim = try await fetchStartProvisioning(url: startURL, identity: identity, session: session)
                 try await sendJSON(["spim": spim], on: socket)
             case "GiveEndProvisioningData":
                 guard let cpim = json["cpim"] as? String else {
                     throw MoreRamError.provisioningFailed("伺服器未提供 cpim 參數。")
                 }
-                let endData = try await fetchEndProvisioning(url: endURL, cpim: cpim, identity: identity)
+                let endData = try await fetchEndProvisioning(url: endURL, cpim: cpim, identity: identity, session: session)
                 try await sendJSON(endData, on: socket)
             case "ProvisioningSuccess":
                 guard let adiPb = json["adi_pb"] as? String, !adiPb.isEmpty else {
@@ -226,22 +253,28 @@ final class MoreRamAnisette {
                 }
                 MoreRamKeychain.shared.adiPb = adiPb
                 logHandler("Anisette 裝置註冊完成。")
-                return try await fetchV3Headers(identifier: identity.identifier, adiPb: adiPb, allowReprovision: false)
+                return try await fetchV3Headers(
+                    identifier: identity.identifier,
+                    adiPb: adiPb,
+                    allowReprovision: false,
+                    session: session
+                )
             default:
                 if result.contains("Error") || result.contains("Invalid") || result == "ClosingPerRequest" || result == "Timeout" || result == "TextOnly" {
-                    let detail = (json["message"] as? String).map { " (\($0))" } ?? ""
+                    let detail = Self.stringField("message", in: json).map { " (\($0))" } ?? ""
                     throw MoreRamError.provisioningFailed("\(result)\(detail)")
                 }
             }
         }
+        throw MoreRamError.provisioningFailed("Anisette 佈署程序逾時。")
     }
 
-    private func fetchStartProvisioning(url: URL, identity: (identifier: String, mdLu: String, deviceId: String)) async throws -> String {
+    private func fetchStartProvisioning(url: URL, identity: (identifier: String, mdLu: String, deviceId: String), session: URLSession) async throws -> String {
         let body: [String: Any] = ["Header": [String: Any](), "Request": [String: Any]()]
         var request = buildAppleRequest(url: url, mdLu: identity.mdLu, deviceId: identity.deviceId)
         request.httpMethod = "POST"
         request.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, _) = try await session.data(for: request)
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]],
               let spim = plist["Response"]?["spim"] as? String else {
             throw MoreRamError.invalidServerResponse("Apple 未回傳有效的 start provisioning 資料。")
@@ -249,12 +282,12 @@ final class MoreRamAnisette {
         return spim
     }
 
-    private func fetchEndProvisioning(url: URL, cpim: String, identity: (identifier: String, mdLu: String, deviceId: String)) async throws -> [String: String] {
+    private func fetchEndProvisioning(url: URL, cpim: String, identity: (identifier: String, mdLu: String, deviceId: String), session: URLSession) async throws -> [String: String] {
         let body: [String: Any] = ["Header": [String: Any](), "Request": ["cpim": cpim]]
         var request = buildAppleRequest(url: url, mdLu: identity.mdLu, deviceId: identity.deviceId)
         request.httpMethod = "POST"
         request.httpBody = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, _) = try await session.data(for: request)
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]],
               let ptm = plist["Response"]?["ptm"] as? String,
               let tk = plist["Response"]?["tk"] as? String else {
@@ -263,11 +296,11 @@ final class MoreRamAnisette {
         return ["ptm": ptm, "tk": tk]
     }
 
-    private func fetchV3Headers(identifier: String, adiPb: String, allowReprovision: Bool) async throws -> AnisetteData {
+    private func fetchV3Headers(identifier: String, adiPb: String, allowReprovision: Bool, session: URLSession) async throws -> AnisetteData {
         let identity = try ensureClientIdentity()
-        logHandler("正在向 \(serverURL.host ?? serverURL.absoluteString) 取得 Anisette v3 Headers…")
+        logHandler("正在向 \(baseURL.host ?? baseURL.absoluteString) 取得 Anisette v3 Headers…")
 
-        var request = URLRequest(url: serverURL.appendingPathComponent("v3").appendingPathComponent("get_headers"))
+        var request = URLRequest(url: baseURL.appendingPathComponent("v3").appendingPathComponent("get_headers"))
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -276,24 +309,25 @@ final class MoreRamAnisette {
             "adi_pb": adiPb
         ])
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: String] else {
-            throw MoreRamError.invalidServerResponse("Anisette 回傳非 JSON 格式。")
+        let (data, response) = try await session.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw MoreRamError.invalidServerResponse("Anisette 回傳非 JSON 格式（HTTP \(statusCode)）。")
         }
 
-        if json["result"] == "GetHeadersError" {
-            let message = json["message"] ?? "未知錯誤"
+        if Self.stringField("result", in: json) == "GetHeadersError" {
+            let message = Self.stringField("message", in: json) ?? "未知錯誤"
             if allowReprovision && message.contains("-45061") {
                 logHandler("Anisette 憑證需重新佈署（-45061），自動重新註冊中…")
                 MoreRamKeychain.shared.adiPb = nil
-                return try await provisionAndFetch()
+                return try await provisionAndFetch(session: session)
             }
             throw MoreRamError.invalidServerResponse(message)
         }
 
-        guard let machineID = json["X-Apple-I-MD-M"],
-              let oneTimePassword = json["X-Apple-I-MD"],
-              let rinfoStr = json["X-Apple-I-MD-RINFO"],
+        guard let machineID = Self.stringField("X-Apple-I-MD-M", in: json),
+              let oneTimePassword = Self.stringField("X-Apple-I-MD", in: json),
+              let rinfoStr = Self.stringField("X-Apple-I-MD-RINFO", in: json),
               let routingInfo = UInt64(rinfoStr) else {
             throw MoreRamError.missingADIData
         }
@@ -310,6 +344,13 @@ final class MoreRamAnisette {
             locale: Locale.current,
             timeZone: TimeZone.current
         )
+    }
+
+    private static func stringField(_ key: String, in dict: [String: Any]) -> String? {
+        guard let value = dict[key] else { return nil }
+        if let str = value as? String { return str }
+        if let num = value as? NSNumber { return num.stringValue }
+        return nil
     }
 
     private func sendJSON(_ dictionary: [String: String], on socket: URLSessionWebSocketTask) async throws {
@@ -362,9 +403,11 @@ struct MoreRamSideStoreAccount: Decodable {
         case adiPB
         case adiPb
         case adipb
+        case adiSnake = "adi_pb"
         case localUser = "local_user"
         case localuser
         case localUserCamel = "localUser"
+        case identifier
     }
 
     init(from decoder: Decoder) throws {
@@ -374,10 +417,12 @@ struct MoreRamSideStoreAccount: Decodable {
         adiPB = try container.decodeIfPresent(String.self, forKey: .adiPB)
             ?? container.decodeIfPresent(String.self, forKey: .adiPb)
             ?? container.decodeIfPresent(String.self, forKey: .adipb)
+            ?? container.decodeIfPresent(String.self, forKey: .adiSnake)
             ?? ""
         localUser = try container.decodeIfPresent(String.self, forKey: .localUser)
             ?? container.decodeIfPresent(String.self, forKey: .localuser)
             ?? container.decodeIfPresent(String.self, forKey: .localUserCamel)
+            ?? container.decodeIfPresent(String.self, forKey: .identifier)
             ?? ""
     }
 
@@ -425,11 +470,13 @@ struct MoreRamAppIDItem: Identifiable {
     }
 
     var hasIncreasedMemoryLimit: Bool {
-        didJustUnlock || Self.featureEnabled("INCREASED_MEMORY_LIMIT", in: appID.features)
+        didJustUnlock
+            || (isCurrentApp && Entitlements.increasedMemory)
+            || Self.featureEnabled("INCREASED_MEMORY_LIMIT", in: appID.features)
     }
 
-    var hasExtendedVirtualAddressing: Bool {
-        Self.featureEnabled("EXTENDED_VIRTUAL_ADDRESSING", in: appID.features)
+    func isEffectivelyEnabled(unlockedBundleIDs: Set<String>) -> Bool {
+        hasIncreasedMemoryLimit || unlockedBundleIDs.contains(bundleIdentifier.lowercased())
     }
 
     private static func featureEnabled(_ key: String, in features: [String: Any]) -> Bool {
@@ -443,7 +490,26 @@ struct MoreRamAppIDItem: Identifiable {
 
 @MainActor
 final class MoreRamCoordinator: ObservableObject {
+    enum AutoUnlockState: Equatable {
+        case idle
+        case alreadyActive
+        case checking
+        case unlockedPendingRefresh(String)
+        case needsSetup
+        case needsTwoFactor
+        case failed(String)
+    }
+
+    static let shared = MoreRamCoordinator()
+
+    private static let unlockedBundleIDsKey = "ipac.moreram.unlockedBundleIDs"
+
     @AppStorage("ipac.anisetteURL") var anisetteServerURL = MoreRamAnisette.defaultServerURL
+    @AppStorage("ipac.moreram.autoOnLaunch") var autoEnableOnLaunch = true
+    @AppStorage("ipac.moreram.dismissedHomePromptBuild") var dismissedHomePromptBuild = ""
+
+    @Published var showSheet = false
+    @Published var autoState: AutoUnlockState = Entitlements.increasedMemory ? .alreadyActive : .idle
 
     @Published var appleID = MoreRamKeychain.shared.appleIDEmail ?? ""
     @Published var password = MoreRamKeychain.shared.appleIDPassword ?? ""
@@ -465,22 +531,64 @@ final class MoreRamCoordinator: ObservableObject {
     @Published var errorMessage: String?
     @Published var successBanner: String?
 
+    @Published private(set) var unlockedBundleIDs: Set<String>
+
     private var account: Account?
     private var session: AppleAPISession?
     private var verificationHandler: ((String?) -> Void)?
     private var cancellationRequested = false
+    private var hitNonInteractiveTwoFactor = false
+    private var didRunLaunchAutoCheck = false
+
+    private init() {
+        let saved = UserDefaults.standard.stringArray(forKey: Self.unlockedBundleIDsKey) ?? []
+        self.unlockedBundleIDs = Set(saved.map { $0.lowercased() })
+    }
 
     var isSignedIn: Bool { account != nil && session != nil && !teams.isEmpty }
+    var currentBundleID: String { Bundle.main.bundleIdentifier ?? "com.henge.app" }
+
+    var currentBuildTag: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "0.4.1"
+        let build = info["CFBundleVersion"] as? String ?? "108"
+        return "\(version)-\(build)"
+    }
+
+    var shouldShowHomeNotice: Bool {
+        guard !Entitlements.increasedMemory else { return false }
+        switch autoState {
+        case .checking, .unlockedPendingRefresh, .needsTwoFactor:
+            return true
+        case .needsSetup, .failed:
+            return dismissedHomePromptBuild != currentBuildTag
+        case .idle, .alreadyActive:
+            return false
+        }
+    }
+
     var hasStoredCredentials: Bool {
         !(MoreRamKeychain.shared.appleIDEmail ?? "").isEmpty &&
         !(MoreRamKeychain.shared.appleIDPassword ?? "").isEmpty
     }
+
     var hasStoredAnisette: Bool {
         !(MoreRamKeychain.shared.identifier ?? "").isEmpty &&
         !(MoreRamKeychain.shared.adiPb ?? "").isEmpty
     }
+
     var selectedTeam: Team? {
         teams.first(where: { $0.identifier == selectedTeamID }) ?? teams.first
+    }
+
+    var installedSignerApp: (name: String, url: URL)? {
+        let candidates = [("SideStore", "sidestore://"), ("AltStore", "altstore://")]
+        for (name, scheme) in candidates {
+            if let url = URL(string: scheme), UIApplication.shared.canOpenURL(url) {
+                return (name, url)
+            }
+        }
+        return nil
     }
 
     func appendLog(_ message: String) {
@@ -488,6 +596,44 @@ final class MoreRamCoordinator: ObservableObject {
         if statusLogs.count > 40 {
             statusLogs.removeFirst(statusLogs.count - 40)
         }
+    }
+
+    func dismissHomePromptForThisBuild() {
+        dismissedHomePromptBuild = currentBuildTag
+    }
+
+    /// Runs automatically once per launch when iPac becomes active.
+    func autoUnlockOnLaunchIfNeeded() async {
+        if Entitlements.increasedMemory {
+            autoState = .alreadyActive
+            recordUnlocked(bundleIdentifier: currentBundleID)
+            HengeLog.log("moreram", "increased-memory-limit is active at launch")
+            return
+        }
+
+        if unlockedBundleIDs.contains(currentBundleID.lowercased()) {
+            autoState = .unlockedPendingRefresh(currentBundleID)
+            HengeLog.log("moreram", "bundle \(currentBundleID) already unlocked on Apple server; waiting for signer Refresh")
+            return
+        }
+
+        guard !didRunLaunchAutoCheck else { return }
+        didRunLaunchAutoCheck = true
+
+        guard autoEnableOnLaunch else {
+            autoState = .needsSetup
+            return
+        }
+
+        guard hasStoredCredentials else {
+            autoState = .needsSetup
+            return
+        }
+
+        appleID = MoreRamKeychain.shared.appleIDEmail ?? appleID
+        password = MoreRamKeychain.shared.appleIDPassword ?? password
+        HengeLog.log("moreram", "starting silent automatic INCREASED_MEMORY_LIMIT check")
+        await performSignInAndAutoUnlock(interactive: false)
     }
 
     func importSideStoreJSON(url: URL) {
@@ -508,23 +654,41 @@ final class MoreRamCoordinator: ObservableObject {
     }
 
     func signIn() async {
+        await performSignInAndAutoUnlock(interactive: true)
+    }
+
+    private func performSignInAndAutoUnlock(interactive: Bool) async {
         guard !isAuthenticating else { return }
         let trimmedID = appleID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedID.isEmpty, !password.isEmpty else {
-            errorMessage = MoreRamError.missingCredentials.localizedDescription
+            if interactive {
+                errorMessage = MoreRamError.missingCredentials.localizedDescription
+            } else {
+                autoState = .needsSetup
+            }
             return
         }
         guard let serverURL = URL(string: anisetteServerURL.trimmingCharacters(in: .whitespacesAndNewlines)),
               serverURL.scheme == "https" || serverURL.scheme == "http" else {
-            errorMessage = MoreRamError.invalidServerURL.localizedDescription
+            if interactive {
+                errorMessage = MoreRamError.invalidServerURL.localizedDescription
+            } else {
+                autoState = .failed(MoreRamError.invalidServerURL.localizedDescription)
+            }
             return
         }
 
         errorMessage = nil
         successBanner = nil
-        statusLogs.removeAll()
+        if interactive {
+            statusLogs.removeAll()
+        }
         isAuthenticating = true
         cancellationRequested = false
+        hitNonInteractiveTwoFactor = false
+        if !Entitlements.increasedMemory {
+            autoState = .checking
+        }
 
         defer {
             isAuthenticating = false
@@ -548,9 +712,7 @@ final class MoreRamCoordinator: ObservableObject {
                 password: password,
                 anisetteData: anisetteData
             ) { [weak self] completionHandler in
-                Task { @MainActor in
-                    self?.prepareVerification(handler: completionHandler)
-                }
+                await self?.handleVerification(interactive: interactive, handler: completionHandler)
             }
 
             guard !cancellationRequested else { throw CancellationError() }
@@ -575,16 +737,77 @@ final class MoreRamCoordinator: ObservableObject {
 
             teams = fetchedTeams
             selectedTeamID = fetchedTeams.first?.identifier ?? ""
-            appendLog("找到 \(fetchedTeams.count) 個開發者團隊，正在載入 App ID…")
-            await loadAppIDs()
+            await autoMatchAndUnlockAppIDs(teams: fetchedTeams, session: authedSession)
         } catch is CancellationError {
             appendLog("已取消登入驗證。")
+            if !Entitlements.increasedMemory {
+                autoState = hasStoredCredentials ? .failed("已取消驗證。") : .needsSetup
+            }
         } catch {
+            if hitNonInteractiveTwoFactor && !interactive {
+                appendLog("背景自動啟用需要雙重認證，請點選輸入驗證碼。")
+                autoState = .needsTwoFactor
+                return
+            }
             if !cancellationRequested {
-                errorMessage = error.localizedDescription
-                appendLog("失敗：\(error.localizedDescription)")
+                let message = error.localizedDescription
+                errorMessage = message
+                appendLog("失敗：\(message)")
+                if !Entitlements.increasedMemory {
+                    autoState = .failed(message)
+                }
             }
         }
+    }
+
+    private func autoMatchAndUnlockAppIDs(teams: [Team], session: AppleAPISession) async {
+        var firstTeamItems: [MoreRamAppIDItem] = []
+        var matchedTeam: Team?
+        var matchedItems: [MoreRamAppIDItem] = []
+        var matchedCandidate: MoreRamAppIDItem?
+
+        for (index, team) in teams.enumerated() {
+            do {
+                let ids = try await AppleAPI.shared.fetchAppIDsForTeam(team: team, session: session)
+                let sorted = Self.sortItems(ids.map { MoreRamAppIDItem(appID: $0) })
+                if index == 0 {
+                    firstTeamItems = sorted
+                }
+                if let exact = sorted.first(where: \.isCurrentApp) {
+                    matchedTeam = team
+                    matchedItems = sorted
+                    matchedCandidate = exact
+                    break
+                }
+                if matchedCandidate == nil, let likely = sorted.first(where: \.isLikelyHengeOrIPac) {
+                    matchedTeam = team
+                    matchedItems = sorted
+                    matchedCandidate = likely
+                }
+            } catch {
+                appendLog("讀取團隊 \(team.name) App ID 時略過：\(error.localizedDescription)")
+            }
+        }
+
+        if let matchedTeam {
+            selectedTeamID = matchedTeam.identifier
+            appIDs = matchedItems
+        } else {
+            appIDs = firstTeamItems
+        }
+
+        guard let target = matchedCandidate else {
+            let notice = "找不到對應目前 iPac（\(currentBundleID)）的 App ID，請展開下方進階清單手動選取。"
+            errorMessage = notice
+            appendLog(notice)
+            if !Entitlements.increasedMemory {
+                autoState = .failed(notice)
+            }
+            return
+        }
+
+        appendLog("已自動鎖定目標 App ID：\(target.bundleIdentifier)，正在向 Apple 開通大記憶體…")
+        await enableIncreasedMemory(for: target)
     }
 
     func submitTwoFactorCode() {
@@ -626,13 +849,7 @@ final class MoreRamCoordinator: ObservableObject {
 
         do {
             let ids = try await AppleAPI.shared.fetchAppIDsForTeam(team: team, session: session)
-            appIDs = ids
-                .map { MoreRamAppIDItem(appID: $0) }
-                .sorted { lhs, rhs in
-                    if lhs.isCurrentApp != rhs.isCurrentApp { return lhs.isCurrentApp }
-                    if lhs.isLikelyHengeOrIPac != rhs.isLikelyHengeOrIPac { return lhs.isLikelyHengeOrIPac }
-                    return lhs.bundleIdentifier.localizedCaseInsensitiveCompare(rhs.bundleIdentifier) == .orderedAscending
-                }
+            appIDs = Self.sortItems(ids.map { MoreRamAppIDItem(appID: $0) })
             appendLog("已載入 \(appIDs.count) 個 App ID。")
         } catch {
             errorMessage = error.localizedDescription
@@ -650,26 +867,50 @@ final class MoreRamCoordinator: ObservableObject {
         defer { updatingAppID = nil }
 
         var capabilities = ["INCREASED_MEMORY_LIMIT"]
-        if includeExtendedVirtualAddressing {
+        let tryExtended = includeExtendedVirtualAddressing || team.type != .free
+        if tryExtended {
             capabilities.append("EXTENDED_VIRTUAL_ADDRESSING")
         }
 
         do {
-            let updated = try await AppleAPI.shared.updateAppID(
-                item.appID,
-                capabilities: capabilities,
-                team: team,
-                session: session
-            )
+            let updated: AppID
+            var appliedCapabilities = capabilities
+            do {
+                updated = try await AppleAPI.shared.updateAppID(
+                    item.appID,
+                    capabilities: capabilities,
+                    team: team,
+                    session: session
+                )
+            } catch where tryExtended && !includeExtendedVirtualAddressing {
+                appliedCapabilities = ["INCREASED_MEMORY_LIMIT"]
+                appendLog("此團隊不支援 Extended Virtual Addressing，自動改以 INCREASED_MEMORY_LIMIT 套用…")
+                updated = try await AppleAPI.shared.updateAppID(
+                    item.appID,
+                    capabilities: appliedCapabilities,
+                    team: team,
+                    session: session
+                )
+            }
             if let idx = appIDs.firstIndex(where: { $0.id == item.id }) {
                 appIDs[idx] = MoreRamAppIDItem(appID: updated, didJustUnlock: true)
             }
-            let extras = includeExtendedVirtualAddressing ? "（含 Extended Virtual Addressing）" : ""
-            successBanner = "已為 \(item.bundleIdentifier) 向 Apple 開通大記憶體權限\(extras)！請回到 SideStore／AltStore 或簽名工具重新 Refresh 一次即可正式生效。"
-            appendLog("已更新 App ID：\(item.bundleIdentifier) -> \(capabilities.joined(separator: ", "))")
+            recordUnlocked(bundleIdentifier: item.bundleIdentifier)
+            let extras = appliedCapabilities.contains("EXTENDED_VIRTUAL_ADDRESSING") ? "（含 Extended Virtual Addressing）" : ""
+            successBanner = "已自動為 \(item.bundleIdentifier) 向 Apple 開通大記憶體權限\(extras)！只要在簽名工具點一次 Refresh 即可永久生效。"
+            if !Entitlements.increasedMemory {
+                autoState = .unlockedPendingRefresh(item.bundleIdentifier)
+            } else {
+                autoState = .alreadyActive
+            }
+            appendLog("已自動開通：\(item.bundleIdentifier) -> \(appliedCapabilities.joined(separator: ", "))")
         } catch {
-            errorMessage = error.localizedDescription
-            appendLog("更新 \(item.bundleIdentifier) 失敗：\(error.localizedDescription)")
+            let message = error.localizedDescription
+            errorMessage = message
+            appendLog("更新 \(item.bundleIdentifier) 失敗：\(message)")
+            if !Entitlements.increasedMemory {
+                autoState = .failed(message)
+            }
         }
     }
 
@@ -685,6 +926,10 @@ final class MoreRamCoordinator: ObservableObject {
             appleID = ""
             password = ""
             MoreRamKeychain.shared.clearCredentials()
+            unlockedBundleIDs.removeAll()
+            UserDefaults.standard.removeObject(forKey: Self.unlockedBundleIDsKey)
+            didRunLaunchAutoCheck = false
+            autoState = Entitlements.increasedMemory ? .alreadyActive : .needsSetup
         }
     }
 
@@ -693,7 +938,27 @@ final class MoreRamCoordinator: ObservableObject {
         appendLog("已清除本地 Anisette 裝置快取，下次登入將重新註冊。")
     }
 
-    private func prepareVerification(handler: @escaping (String?) -> Void) {
+    private func recordUnlocked(bundleIdentifier: String) {
+        let lower = bundleIdentifier.lowercased()
+        if unlockedBundleIDs.insert(lower).inserted {
+            UserDefaults.standard.set(Array(unlockedBundleIDs).sorted(), forKey: Self.unlockedBundleIDsKey)
+        }
+    }
+
+    private static func sortItems(_ items: [MoreRamAppIDItem]) -> [MoreRamAppIDItem] {
+        items.sorted { lhs, rhs in
+            if lhs.isCurrentApp != rhs.isCurrentApp { return lhs.isCurrentApp }
+            if lhs.isLikelyHengeOrIPac != rhs.isLikelyHengeOrIPac { return lhs.isLikelyHengeOrIPac }
+            return lhs.bundleIdentifier.localizedCaseInsensitiveCompare(rhs.bundleIdentifier) == .orderedAscending
+        }
+    }
+
+    private func handleVerification(interactive: Bool, handler: @escaping (String?) -> Void) {
+        guard interactive else {
+            hitNonInteractiveTwoFactor = true
+            handler(nil)
+            return
+        }
         guard !cancellationRequested else {
             handler(nil)
             return

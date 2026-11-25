@@ -10,6 +10,7 @@ struct SettingsView: View {
     @ObservedObject private var jit = JITCoordinator.shared
     @ObservedObject private var extStorage = ExternalInstallStorage.shared
     @ObservedObject private var machines = Machines.shared
+    @ObservedObject private var moreRam = MoreRamCoordinator.shared
     @AppStorage(JITCoordinator.autoEnableKey) private var jitAtLaunch = false
     @AppStorage(HardwareMouse.speedKey) private var mouseSpeed = 1.0
     @AppStorage(HardwareMouse.reverseKey) private var reverseScrolling = false
@@ -29,7 +30,6 @@ struct SettingsView: View {
     @AppStorage(MacAppsFeature.key) private var macApps = false
     @State private var pickingExternalFolder = false
     @State private var ssdDialog: SSDDialog?
-    @State private var showMoreRam = false
 
     private var inputDescription: String {
         if inputMode == .touchscreen {
@@ -64,12 +64,12 @@ struct SettingsView: View {
                     Picker("啟用方式", selection: $jit.method) {
                         ForEach(JITMethod.allCases) { Text($0.title).tag($0) }
                     }
-                    Text(jit.method == .automatic ? jit.automaticDescription : "Henge 將使用「\(jit.method.title)」。")
+                    Text(jit.method == .automatic ? jit.automaticDescription : "iPac 將使用「\(jit.method.title)」。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Button("設定 JIT") { jit.showSetup = true }
-                    Toggle("開啟 Henge 時自動啟用 JIT", isOn: $jitAtLaunch)
+                    Toggle("開啟 iPac 時自動啟用 JIT", isOn: $jitAtLaunch)
                     if jitAtLaunch {
-                        Text("若 LocalDevVPN 尚未連線，Henge 會自動開啟 VPN 連線後返回。")
+                        Text("若 LocalDevVPN 尚未連線，iPac 會自動開啟 VPN 連線後返回。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     LabeledContent("程式碼快取保留區", value: "\(JITBootstrap.jitBytes >> 20) MB（每次啟動配給）")
@@ -77,21 +77,22 @@ struct SettingsView: View {
                 .listRowBackground(Desk.card)
                 Section("記憶體配額") {
                     LabeledContent("裝置實體記憶體", value: "\(Device.physicalMemoryGB) GB")
-                    LabeledContent("大記憶體 Entitlement", value: Entitlements.increasedMemory ? "已啟用" : "未啟用")
+                    LabeledContent("大記憶體 Entitlement", value: Entitlements.increasedMemory ? "已自動啟用" : "尚未啟用")
                     LabeledContent("App 上限（啟動時）", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
                     LabeledContent("可用記憶體空間", value: ByteText.string(UInt64(henge_available_memory())))
-                    LabeledContent("核心 No Footprint 狀態", value: henge_vm_can_no_footprint() != 0 ? "可使用" : "待機（附加 JIT 後啟用）")
+                    LabeledContent("核心 No Footprint 狀態", value: henge_vm_can_no_footprint() != 0 ? "可使用" : "待機（附加 JIT 後自動啟用）")
+                    Toggle("開啟 iPac 時自動檢查並啟用大記憶體", isOn: $moreRam.autoEnableOnLaunch)
                     Button {
-                        showMoreRam = true
+                        moreRam.showSheet = true
                     } label: {
                         Label(
-                            Entitlements.increasedMemory ? "管理大記憶體權限（內建 GetMoreRam）…" : "解鎖最大記憶體（內建 GetMoreRam）…",
+                            Entitlements.increasedMemory ? "管理大記憶體權限與 GetMoreRam／iRAM+…" : "一鍵自動解鎖最大記憶體…",
                             systemImage: "memorychip"
                         )
                     }
                     Text(Entitlements.increasedMemory
-                         ? "已具備大記憶體權限。開機並掛載 JIT 後，虛擬 Mac 記憶體由核心以 LEDGER_NO_FOOTPRINT 免計入 App 上限。"
-                         : "目前憑證未包含 INCREASED_MEMORY_LIMIT 權限。點上方「解鎖最大記憶體（內建 GetMoreRam）」登入 Apple ID 即可一鍵開通。")
+                         ? "已自動具備大記憶體權限。開機並掛載 JIT 後，虛擬 Mac 記憶體由核心以 LEDGER_NO_FOOTPRINT 免計入 App 上限。"
+                         : "點上方登入一次 Apple ID 或匯入 SideStore 帳號 JSON，iPac 會自動在背景為目前 App ID 開通大記憶體；再於簽名工具點一次 Refresh 即生效。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -130,7 +131,7 @@ struct SettingsView: View {
                             .pickerStyle(.menu)
                             Toggle("對調音量鍵左右功能", isOn: $swapButtons)
                         }
-                        Text("Henge 可將螢幕模擬為 Magic Trackpad 支援原生 macOS 多指手勢。\n\n\(inputDescription)")
+                        Text("iPac 可將螢幕模擬為 Magic Trackpad 支援原生 macOS 多指手勢。\n\n\(inputDescription)")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .listRowBackground(Desk.card)
@@ -151,7 +152,7 @@ struct SettingsView: View {
                         Text("1 GB").tag(1024)
                         Text("1.5 GB").tag(1536)
                     }
-                    Text("較大的指令快取可減少重譯次數並提升流暢度，需重開 Henge 生效；若較小記憶體機型無法啟用 JIT 請調低此值。")
+                    Text("較大的指令快取可減少重譯次數並提升流暢度，需重開 iPac 生效；若較小記憶體機型無法啟用 JIT 請調低此值。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("30 Hz 最省效能、60 Hz 最流暢（非 120 Hz 機型會自動限制於 60 Hz）。以上設定將於下次啟動 Mac 時套用。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -159,7 +160,7 @@ struct SettingsView: View {
                 .listRowBackground(Desk.card)
                 Section("即時續玩（背景凍結儲存）") {
                     Toggle("離開時自動保存執行狀態", isOn: $instantResume)
-                    Text("切換至背景時會自動把目前 Mac 狀態壓縮寫入儲存空間，即使 iOS 回收 Henge 也可於幾秒內接續剛剛的畫面（實驗性）。")
+                    Text("切換至背景時會自動把目前 Mac 狀態壓縮寫入儲存空間，即使 iOS 回收 iPac 也可於幾秒內接續剛剛的畫面（實驗性）。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -210,7 +211,7 @@ struct SettingsView: View {
                                 ssdDialog = .confirmClear(summary)
                             }
                         } label: {
-                            Label("清除 SSD 上的 Henge 資料…", systemImage: "trash")
+                            Label("清除 SSD 上的 iPac／Henge 資料…", systemImage: "trash")
                         }
                         .disabled(extStorage.isClearing || machines.isBusy || Machines.isVMRunning)
                     }
@@ -218,7 +219,7 @@ struct SettingsView: View {
                     if extStorage.isClearing {
                         HStack(spacing: 10) {
                             ProgressView().controlSize(.small)
-                            Text("正在清除 SSD 上的 Henge 資料…").font(.footnote).foregroundStyle(.secondary)
+                            Text("正在清除 SSD 上的 iPac／Henge 資料…").font(.footnote).foregroundStyle(.secondary)
                         }
                     }
                     if let msg = extStorage.statusMessage {
@@ -228,7 +229,7 @@ struct SettingsView: View {
                         Text(err).font(.footnote).foregroundStyle(Desk.bad)
                     }
                     LabeledContent("硬體識別規格", value: "\(Device.marketingName) (\(Device.chipName ?? "arm64"))")
-                    LabeledContent("版本", value: "0.4.0 (Build 107 • iPac 繁體中文・內建 GetMoreRam)")
+                    LabeledContent("版本", value: "0.4.1 (Build 108 • iPac 繁體中文・自動大記憶體)")
                 }
                 .listRowBackground(Desk.card)
                 Section("診斷日誌") {
@@ -243,9 +244,6 @@ struct SettingsView: View {
                 if case let .success(url) = result {
                     _ = extStorage.selectFolder(url)
                 }
-            }
-            .sheet(isPresented: $showMoreRam) {
-                MoreRamView()
             }
             .confirmationDialog(
                 ssdDialogTitle,

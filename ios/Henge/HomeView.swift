@@ -7,6 +7,8 @@ struct HomeView: View {
     @ObservedObject private var jit = JITCoordinator.shared
     @ObservedObject private var installer = Installer.shared
     @ObservedObject private var extStorage = ExternalInstallStorage.shared
+    @ObservedObject private var moreRam = MoreRamCoordinator.shared
+    @Environment(\.openURL) private var openURL
     private enum FolderPicker { case attachExternal, importCopy }
 
     @Binding var running: VirtualMac?
@@ -117,6 +119,41 @@ struct HomeView: View {
         if Device.chipTooOld {
             NoticeRow(symbol: "exclamationmark.triangle.fill", text: Device.chipTooOldText, tint: Desk.bad)
         }
+        if moreRam.shouldShowHomeNotice {
+            switch moreRam.autoState {
+            case .checking:
+                NoticeRow(symbol: "memorychip", text: "正在自動啟用 iPac 最大記憶體權限…", tint: Desk.accentLight)
+            case .unlockedPendingRefresh:
+                Button {
+                    if let signer = moreRam.installedSignerApp {
+                        openURL(signer.url)
+                    } else {
+                        moreRam.showSheet = true
+                    }
+                } label: {
+                    NoticeRow(
+                        symbol: "checkmark.seal.fill",
+                        text: "已自動向 Apple 開通大記憶體，點此打開簽名工具 Refresh 生效",
+                        trailing: moreRam.installedSignerApp.map { "開啟 \($0.name)" } ?? "查看",
+                        tint: Desk.good
+                    )
+                }
+            case .needsTwoFactor:
+                Button { moreRam.showSheet = true } label: {
+                    NoticeRow(symbol: "lock.shield", text: "自動啟用大記憶體需要 Apple 雙重驗證", trailing: "輸入驗證碼", tint: Desk.warn)
+                }
+            case .needsSetup:
+                Button { moreRam.showSheet = true } label: {
+                    NoticeRow(symbol: "memorychip", text: "此簽名尚未包含 Apple 大記憶體權限", trailing: "一鍵啟用", tint: Desk.accentLight)
+                }
+            case .failed:
+                Button { moreRam.showSheet = true } label: {
+                    NoticeRow(symbol: "exclamationmark.triangle.fill", text: "自動啟用大記憶體未完成，點此重試", trailing: "開啟", tint: Desk.warn)
+                }
+            case .idle, .alreadyActive:
+                EmptyView()
+            }
+        }
         if installer.busy {
             Button { tab = .install } label: {
                 NoticeRow(symbol: "arrow.down.circle.fill", text: "正在安裝「\(installer.machineName)」…", trailing: "查看進度")
@@ -176,7 +213,9 @@ struct HomeView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(other.name).font(.system(size: 16, weight: .medium)).foregroundStyle(Desk.text)
-                                Text(other.summary).font(.system(size: 13)).foregroundStyle(other.isExternal && !other.isAvailable ? Desk.bad : Desk.dim)
+                                Text("\(other.summary) · \(other.effectiveCPUs) 核心")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(other.isExternal && !other.isAvailable ? Desk.bad : Desk.dim)
                             }
                             Spacer()
                             Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.faint)
