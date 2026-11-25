@@ -93,7 +93,7 @@ final class MacAppsStore: ObservableObject {
     /// A .dmg (its apps and programs are copied out), an .app, or a lone program.
     func bring(in url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
-        busy = "正在匯入 \(url.lastPathComponent)…"
+        busy = L10n.format("正在匯入 %@…", url.lastPathComponent)
         problem = nil
         let folder = Self.folder
         Task.detached(priority: .userInitiated) {
@@ -111,7 +111,7 @@ final class MacAppsStore: ObservableObject {
                 do { try FileManager.default.copyItem(at: url, to: to) } catch { trouble = error.localizedDescription }
                 if trouble == nil, MacApp(url: to) == nil {
                     try? FileManager.default.removeItem(at: to)
-                    trouble = "\(url.lastPathComponent) 不是有效的 Mac App 或可執行檔。"
+                    trouble = L10n.format("%@ 不是有效的 Mac App 或可執行檔。", url.lastPathComponent)
                 }
             }
             let found = trouble
@@ -147,13 +147,15 @@ final class MacAppsStore: ObservableObject {
 struct MacAppsView: View {
     @ObservedObject private var store = MacAppsStore.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var interfaceLocale
     @State private var picking = false
 
     var body: some View {
+        let _ = interfaceLocale
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
-                    Text("透過 Henge 內建轉譯層不需啟動虛擬 Mac 即可執行部分 Mac 程式。目前支援無視窗命令列工具，視窗應用屬實驗階段。")
+                    Text(L10n.text("透過 Henge 內建轉譯層不需啟動虛擬 Mac 即可執行部分 Mac 程式。目前支援無視窗命令列工具，視窗應用屬實驗階段。"))
                         .font(.system(size: 14)).foregroundStyle(Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4).padding(.bottom, 12)
@@ -162,8 +164,8 @@ struct MacAppsView: View {
                     if store.apps.isEmpty && store.busy == nil {
                         VStack(spacing: 10) {
                             Image(systemName: "shippingbox").font(.system(size: 34)).foregroundStyle(Desk.faint)
-                            Text("尚無匯入的程式").font(.system(size: 17, weight: .semibold))
-                            Text("可從「檔案」App 匯入 .dmg 或 .app，或先加入內建範例程式測試。")
+                            Text(L10n.text("尚無匯入的程式")).font(.system(size: 17, weight: .semibold))
+                            Text(L10n.text("可從「檔案」App 匯入 .dmg 或 .app，或先加入內建範例程式測試。"))
                                 .font(.system(size: 14)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
                         }
                         .padding(28).frame(maxWidth: .infinity).deskCard()
@@ -171,7 +173,7 @@ struct MacAppsView: View {
                     ForEach(store.apps) { app in
                         NavigationLink(value: app) { MacAppRow(app: app) }.buttonStyle(.plain).padding(.bottom, 10)
                     }
-                    Button("加入範例程式") { store.addSamples() }
+                    Button(L10n.text("加入範例程式")) { store.addSamples() }
                         .buttonStyle(DeskButtonStyle()).padding(.top, 8)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 12).deskColumn()
@@ -180,9 +182,9 @@ struct MacAppsView: View {
             .navigationTitle("Mac App")
             .navigationDestination(for: MacApp.self) { MacAppRunView(app: $0) }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(L10n.text("完成")) { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
-                    Button { picking = true } label: { Image(systemName: "plus") }.accessibilityLabel("匯入 Mac App")
+                    Button { picking = true } label: { Image(systemName: "plus") }.accessibilityLabel(L10n.text("匯入 Mac App"))
                 }
             }
             .fileImporter(isPresented: $picking, allowedContentTypes: [.diskImage, .applicationBundle, .folder, .unixExecutable, .data]) { result in
@@ -195,12 +197,14 @@ struct MacAppsView: View {
 
 private struct MacAppRow: View {
     let app: MacApp
+    @Environment(\.locale) private var interfaceLocale
     var body: some View {
+        let _ = interfaceLocale
         HStack(spacing: 14) {
             Image(systemName: app.kindSymbol).font(.system(size: 22)).foregroundStyle(app.canRun ? Desk.accent : Desk.faint).frame(width: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(app.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(Desk.text).lineLimit(1)
-                Text(app.verdict.title).font(.system(size: 13)).foregroundStyle(app.canRun ? Desk.good : Desk.dim).lineLimit(1)
+                Text(L10n.text(app.verdict.title)).font(.system(size: 13)).foregroundStyle(app.canRun ? Desk.good : Desk.dim).lineLimit(1)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.faint)
@@ -211,63 +215,79 @@ private struct MacAppRow: View {
 
 /// One app or program: what it is, and Run for a program, with what it printed.
 struct MacAppRunView: View {
+    private enum RunResult {
+        case failed(String)
+        case finished(Int)
+
+        var text: String {
+            switch self {
+            case .failed(let reason):
+                return L10n.format("無法執行：%@", reason)
+            case .finished(let code):
+                return L10n.format("已結束（結束碼 %@）。", String(describing: code))
+            }
+        }
+    }
+
     let app: MacApp
     @ObservedObject private var store = MacAppsStore.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var interfaceLocale
     @State private var running = false
     @State private var output = ""
-    @State private var result: String?
+    @State private var result: RunResult?
     @State private var confirmDelete = false
     @State private var showScreen = false
 
     var body: some View {
+        let _ = interfaceLocale
         ScrollView {
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(app.verdict.title).font(.system(size: 17, weight: .semibold)).foregroundStyle(app.canRun ? Desk.good : Desk.text)
-                    Text(app.verdict.detail).font(.system(size: 14)).foregroundStyle(Desk.dim)
+                    Text(L10n.text(app.verdict.title)).font(.system(size: 17, weight: .semibold)).foregroundStyle(app.canRun ? Desk.good : Desk.text)
+                    Text(L10n.text(app.verdict.detail)).font(.system(size: 14)).foregroundStyle(Desk.dim)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(17).deskCard()
 
-                DeskHeading("關於")
+                DeskHeading(L10n.text("關於"))
                 VStack(alignment: .leading, spacing: 6) {
-                    if !app.identifier.isEmpty { LabeledContent("識別碼", value: app.identifier) }
-                    LabeledContent("架構", value: [app.arm64 ? "Apple Silicon" : nil, app.intel ? "Intel" : nil].compactMap { $0 }.joined(separator: " 與 "))
-                    if !app.minMacOS.isEmpty { LabeledContent("最低 macOS", value: app.minMacOS + " 或更新版本") }
+                    if !app.identifier.isEmpty { LabeledContent(L10n.text("識別碼"), value: app.identifier) }
+                    LabeledContent(L10n.text("架構"), value: [app.arm64 ? "Apple Silicon" : nil, app.intel ? "Intel" : nil].compactMap { $0 }.joined(separator: L10n.text(" 與 ")))
+                    if !app.minMacOS.isEmpty { LabeledContent(L10n.text("最低 macOS"), value: L10n.format("%@ 或更新版本", app.minMacOS)) }
                 }
                 .font(.system(size: 15)).padding(17).deskCard()
 
                 if app.canRun {
-                    Button(running ? "執行中…" : "執行") { run() }
+                    Button(running ? L10n.text("執行中…") : L10n.text("執行")) { run() }
                         .buttonStyle(DeskButtonStyle()).disabled(running || (result == nil && henge_tl_ran_program() != 0)).padding(.top, 16)
-                    Text("每次啟動 Henge 僅能執行一個獨立程式。執行完畢後請關閉重開 Henge 再執行下一個或啟動虛擬 Mac。")
+                    Text(L10n.text("每次啟動 Henge 僅能執行一個獨立程式。執行完畢後請關閉重開 Henge 再執行下一個或啟動虛擬 Mac。"))
                         .font(.system(size: 13)).foregroundStyle(Desk.dim).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                     if result != nil || !output.isEmpty {
-                        DeskHeading("輸出結果")
+                        DeskHeading(L10n.text("輸出結果"))
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(output.isEmpty ? "（無輸出內容）" : output)
+                            Text(output.isEmpty ? L10n.text("（無輸出內容）") : output)
                                 .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            if let result { Text(result).font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.dim) }
+                            if let result { Text(result.text).font(.system(size: 13, weight: .semibold)).foregroundStyle(Desk.dim) }
                         }
                         .padding(17).deskCard()
                     }
                 }
                 if app.canOpenWindowed {
-                    Button("開啟視窗（實驗性）") { showScreen = true }
+                    Button(L10n.text("開啟視窗（實驗性）")) { showScreen = true }
                         .buttonStyle(DeskButtonStyle()).disabled(henge_tl_ran_program() != 0).padding(.top, 16)
-                    Text("每次啟動 Henge 僅能執行一個應用程式。輕點為左鍵、單指捲動、雙指拖曳、長按為右鍵；鍵盤按鈕可叫出輸入。結束後請上滑關閉 Henge。")
+                    Text(L10n.text("每次啟動 Henge 僅能執行一個應用程式。輕點為左鍵、單指捲動、雙指拖曳、長按為右鍵；鍵盤按鈕可叫出輸入。結束後請上滑關閉 Henge。"))
                         .font(.system(size: 13)).foregroundStyle(Desk.dim).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                 }
-                Button("刪除", role: .destructive) { confirmDelete = true }.padding(.top, 24)
+                Button(L10n.text("刪除"), role: .destructive) { confirmDelete = true }.padding(.top, 24)
             }
             .padding(.horizontal, 16).padding(.vertical, 12).deskColumn()
         }
         .background(Desk.page)
         .navigationTitle(app.name)
         .fullScreenCover(isPresented: $showScreen) { MacAppScreen(app: app) }
-        .confirmationDialog("確定刪除「\(app.name)」嗎？", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("刪除", role: .destructive) { store.delete(app); dismiss() }
+        .confirmationDialog(L10n.format("確定刪除「%@」嗎？", app.name), isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button(L10n.text("刪除"), role: .destructive) { store.delete(app); dismiss() }
         }
     }
 
@@ -285,7 +305,7 @@ struct MacAppRunView: View {
             HengeLog.log("macapps", "\(exe) returned \(rc)\(why.isEmpty ? "" : ": \(why)")")
             await MainActor.run {
                 output = String(text.suffix(20000))
-                result = rc == -1 && !why.isEmpty ? "無法執行：\(why)" : "已結束（結束碼 \(rc)）。"
+                result = rc == -1 && !why.isEmpty ? .failed(why) : .finished(Int(rc))
                 running = false
             }
         }

@@ -3,3 +3,4 @@
 #include "Native/henge-tl.h"
 #include "Native/HuskRPPairing.h"
 #include "hvsparse.h"
+#include "ipsw_validate.h"

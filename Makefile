@@ -116,6 +116,7 @@ $(B)/test_%: tests/test_%.c tests/%_programs.S tests/harness.S tests/harness.h $
 	$(CC) $(CFLAGS) -Itests tests/test_$*.c tests/$*_programs.S tests/harness.S $(ENGINE) -o $@
 
 test: all
+test test-core: $(TESTS)
 	@ulimit -s 65520; for t in $(TESTS); do echo "== $$t"; $$t || exit 1; done # a test keeps a whole HvCpu (2 MB of TLB and more) on its stack
 
 $(B):
@@ -124,7 +125,7 @@ $(B):
 clean:
 	rm -rf $(B)
 
-.PHONY: all test clean
+.PHONY: all test test-core clean
 
 # ---- iOS: the engine as a static library for the Henge app (ios/) ----
 # make ios-lib -> build/ios/libhengevm.a. Networking links the arm64 iOS builds
@@ -208,8 +209,8 @@ test-tl-glue: $(B)/test_tl_glue $(B)/tl-exit3
 .PHONY: test-tl-glue
 
 # The restore stack, built from the same sources and with the same stand-ins as iOS.
-$(B)/mac-restore/libhengerestore.a: tools/build_ios_restore.sh host/libusb_shim.c host/install.c host/curl_shim.m $(wildcard third_party/*/src/*.c) $(wildcard third_party/libirecovery/src/*.c)
-	nice -n 10 tools/build_ios_restore.sh mac
+$(B)/mac-restore/libhengerestore.a: tools/build_ios_restore.sh host/libusb_shim.c host/install.c host/ipsw_validate.c host/ipsw_validate.h host/curl_shim.m $(wildcard third_party/*/src/*.c) $(wildcard third_party/libirecovery/src/*.c)
+	nice -n 10 tools/build_ios_restore.sh mac "$(B)/mac-restore"
 
 # The installer: libirecovery, usbmuxd and idevicerestore (third_party, vendored
 # sources) linked against host/libusb_shim.c, so they restore the virtual Mac
@@ -275,3 +276,90 @@ $(B)/test_device_identity: ios/Henge/DeviceIdentity.swift tests/test_device_iden
 test-identity: $(B)/test_device_identity
 	$(B)/test_device_identity
 .PHONY: test-identity
+
+# RAM advice must not change a full or over-physical-RAM configuration.
+$(B)/test_guest_ram_budget: ios/Henge/AppLanguage.swift ios/Henge/GuestRAMBudget.swift tests/test_guest_ram_budget.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-memory-config: $(B)/test_guest_ram_budget
+	$(B)/test_guest_ram_budget
+.PHONY: test-memory-config
+
+# Sign-out and team changes must invalidate previous asynchronous work.
+$(B)/test_more_ram: ios/Henge/MoreRam/MoreRamOperationState.swift tests/test_more_ram.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-more-ram: $(B)/test_more_ram
+	$(B)/test_more_ram
+.PHONY: test-more-ram
+
+# Cache validation and file ownership use the production Swift helpers.
+$(B)/test_restore_image_validation: ios/Henge/MachineStorageSafety.swift ios/Henge/RestoreImageValidation.swift tests/test_restore_image_validation.swift host/ipsw_validate.h | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -import-objc-header host/ipsw_validate.h $(filter %.swift,$^) -o $@
+
+$(B)/test_ranged_download: ios/Henge/MachineStorageSafety.swift ios/Henge/RangedDownload.swift tests/test_ranged_download.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-install-safety: $(B)/test_restore_image_validation $(B)/test_ranged_download
+	$(B)/test_restore_image_validation
+	$(B)/test_ranged_download
+.PHONY: test-install-safety
+
+# The native validator links the same vendored parsers as the shipped installer.
+$(B)/test_ipsw_validation: host/ipsw_validate.c host/ipsw_validate.h tests/test_ipsw_validation.c $(B)/mac-restore/libhengerestore.a | $(B)
+	$(CC) $(CFLAGS) -Ithird_party/libzip/lib -I$(B)/mac-restore/deps/libzip -Ithird_party/libplist/include \
+		host/ipsw_validate.c tests/test_ipsw_validation.c $(B)/mac-restore/libhengerestore.a -lz -o $@
+
+test-ipsw-validation: $(B)/test_ipsw_validation
+	$(B)/test_ipsw_validation
+.PHONY: test-ipsw-validation
+
+$(B)/test_machine_storage_safety: ios/Henge/MachineStorageSafety.swift tests/test_machine_storage_safety.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -parse-as-library $^ -o $@
+
+$(B)/test_virtual_mac_memory: ios/Henge/AppLanguage.swift ios/Henge/GuestRAMBudget.swift ios/Henge/VirtualMac.swift ios/Henge/PortableMachineManifest.swift ios/Henge/GuestMemory.swift tests/test_virtual_mac_memory.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -parse-as-library $^ -o $@
+
+$(B)/test_external_storage_target: ios/Henge/AppLanguage.swift ios/Henge/GuestRAMBudget.swift ios/Henge/PortableMachineManifest.swift ios/Henge/MachineStorageSafety.swift ios/Henge/ExternalInstallStorage.swift tests/test_external_storage_target.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -parse-as-library $^ -o $@
+
+test-storage-safety: $(B)/test_machine_storage_safety $(B)/test_virtual_mac_memory $(B)/test_external_storage_target
+	$(B)/test_machine_storage_safety
+	$(B)/test_virtual_mac_memory
+	$(B)/test_external_storage_target
+.PHONY: test-storage-safety
+
+$(B)/test_app_language: ios/Henge/AppLanguage.swift tests/test_app_language.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+$(B)/Localizations.bundle/.compiled: ios/Henge/Resources/Localizable.xcstrings | $(B)
+	mkdir -p "$(B)/Localizations.bundle"
+	xcrun xcstringstool compile --output-directory "$(B)/Localizations.bundle" $<
+	touch $@
+
+test-localization: $(B)/test_app_language $(B)/Localizations.bundle/.compiled
+	$(B)/test_app_language "$(abspath $(B)/Localizations.bundle)"
+.PHONY: test-localization
+
+$(B)/test_engine_tuning: ios/Henge/EngineTuning.swift tests/test_engine_tuning.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-engine-tuning: $(B)/test_engine_tuning
+	$(B)/test_engine_tuning
+.PHONY: test-engine-tuning
+
+$(B)/test_app_language_ui: ios/Henge/AppLanguage.swift ios/Henge/AppLanguageScope.swift tests/test_app_language_ui.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-localization-ui: $(B)/test_app_language_ui $(B)/Localizations.bundle/.compiled
+	$(B)/test_app_language_ui "$(abspath $(B)/Localizations.bundle)"
+.PHONY: test-localization-ui
+
+$(B)/test_bench: tests/jit_loop_fixture.h
+
+$(B)/test_jit_metadata: tests/test_jit_metadata.c tests/bench_programs.S tests/harness.S tests/harness.h tests/jit_loop_fixture.h $(ENGINE) | $(B)
+	$(CC) $(CFLAGS) -Itests tests/test_jit_metadata.c tests/bench_programs.S tests/harness.S $(ENGINE) -o $@
+
+test-jit-metadata: $(B)/test_jit_metadata
+	$(B)/test_jit_metadata
+.PHONY: test-jit-metadata

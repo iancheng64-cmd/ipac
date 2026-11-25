@@ -1,113 +1,8 @@
 import Foundation
 import UIKit
 
-/// A Mac made on the Mac (HengeVM or Henge) and brought over: its boot ROM,
-/// disk and auxiliary storage, and the identity it was installed with.
-struct VirtualMac: Identifiable, Codable, Hashable {
-    var id = UUID()
-    var name: String
-    var ecid: UInt64
-    var seed: UInt64
-    var ramMB: Int
-    var diskBytes: Int64
-    var added = Date()
-    var osName: String?
-    var lastUsed: Date?
-    /// The size macOS is told its screen is. Macs made before this was a choice have none: 16:9.
-    var screenWidth: Int?
-    var screenHeight: Int?
-    /// m4 fork: the iPad's own panel at Retina density. On by default on iPad, for Macs that never chose.
-    var retina: Bool?
-    /// About This Mac reports the device Henge runs on (its name and chip) instead of the
-    /// virtual Mac. nil/false: the vmapple identity. Applied at the next boot.
-    var reportHostIdentity: Bool?
-    /// With reportHostIdentity: also report the device's model identifier (hw.model).
-    /// Experimental — it may bring the device's icon, and may confuse macOS.
-    var reportHostModelID: Bool?
-    /// Security-scoped bookmark to the external folder holding `HengeMachines/<id>/`, or nil for internal Macs.
-    var externalFolderBookmark: Data?
-    /// User-visible external drive/folder name shown even when the drive is unplugged.
-    var externalDriveName: String?
-    /// When true (default for external Macs), automatically adapts RAM, CPU ceiling, and screen ratio to the current host.
-    var autoAdaptToHost: Bool?
-    /// Relative path from the bookmarked folder to the Mac's directory when stored outside standard `HengeMachines/<id>`.
-    var externalRelativePath: String?
-    /// Per-Mac virtual CPU count (nil = inherit legacy default until adjusted in settings).
-    var cpuCount: Int?
-
-    var isExternal: Bool { externalFolderBookmark != nil }
-    var adaptsToHost: Bool { autoAdaptToHost ?? isExternal }
-    var effectiveRAMMB: Int { adaptsToHost ? Device.suggestedRAMGB * 1024 : ramMB }
-    var configuredCPUs: Int {
-        if let cpuCount { return max(1, min(Device.maxEngineCPUs, cpuCount)) }
-        let legacy = UserDefaults.standard.integer(forKey: "henge.cpus")
-        let fallback = legacy > 0 ? legacy : min(4, Device.maxCPUCount)
-        return max(1, min(Device.maxEngineCPUs, fallback))
-    }
-    var effectiveCPUs: Int {
-        let cap = adaptsToHost ? Device.maxSafeCPUs : Device.maxCPUCount
-        return max(1, min(configuredCPUs, cap))
-    }
-    var isAvailable: Bool { Machines.isAvailable(self) }
-    var locationLabel: String { isExternal ? (externalDriveName ?? "外接硬碟") : "此 \(Device.name)" }
-    var isRetina: Bool { Device.isPad && (retina ?? false) }
-    var screen: (width: Int, height: Int) {
-        if isRetina { return Device.retinaScreen }
-        if adaptsToHost { return Device.fittingScreen }
-        return (screenWidth ?? 1920, screenHeight ?? 1080)
-    }
-    var aspect: CGFloat { CGFloat(screen.width) / CGFloat(screen.height) }
-
-    var directory: URL { Machines.directory(for: self) }
-    var rom: URL { directory.appendingPathComponent("AVPBooter.vmapple2.bin") }
-    var disk: URL { directory.appendingPathComponent("disk.img") }
-    var aux: URL { directory.appendingPathComponent("auxiliary.bin") }
-}
-
-/// How much RAM a Mac gets. The engine first asks the kernel to leave it out of Henge's footprint,
-/// which is allowed once a debugger has attached (how JIT is turned on). If that is refused it uses
-/// a file beside the disk: iOS's memory limit does not count a mapped file's pages either.
-enum GuestMemory {
-    /// Points the engine at the file (it is unlinked as soon as it is open) and returns the size that fits.
-    /// When `LEDGER_NO_FOOTPRINT` is available (after JIT debugger attaches), VM RAM does not count toward
-    /// app footprint or consume disk backing, so internal free storage does not clamp guest RAM.
-    static func prepare(_ mac: VirtualMac, requestedRAMMB: Int? = nil) -> UInt64 {
-        henge_ios_release_high_hold()
-        try? FileManager.default.createDirectory(at: Machines.root, withIntermediateDirectories: true)
-        let file = Machines.root.appendingPathComponent("ram.tmp")
-        setenv("HV_RAM_FILE", file.path, 1)
-        let noFootprint = henge_vm_can_no_footprint() != 0
-        let free = ExternalInstallStorage.volumeFreeBytes(at: Machines.root)
-        let room: UInt64 = noFootprint
-            ? UInt64.max
-            : (free > 0 ? UInt64(max(free - (2 << 30), 0)) >> 20 : UInt64.max)
-        let reach = henge_largest_mapping_mb()
-        let headroom = reach > 512 ? reach - 512 : reach
-        let rawTarget = requestedRAMMB ?? mac.effectiveRAMMB
-        let targetMB = (requestedRAMMB == nil && mac.adaptsToHost)
-            ? min(UInt64(rawTarget), UInt64(Device.suggestedRAMGB) * 1024)
-            : UInt64(rawTarget)
-        let ram = min(targetMB, room, headroom) / 512 * 512
-        let roomNote = noFootprint ? "no-footprint" : "\(room) MB"
-        HengeLog.log("session", "guest RAM \(ram) MB (requested \(targetMB), physical \(Device.physicalMemoryGB) GB, noFootprint \(noFootprint), autoAdapt \(mac.adaptsToHost), internal room \(roomNote), largest mapping \(reach))")
-        return ram
-    }
-}
-
 /// machine.json in a machine or exported folder. Optional portable fields stay backward compatible with older manifests.
-private struct MachineFile: Codable {
-    var id: UUID?
-    var name: String?
-    var ecid: UInt64
-    var seed: UInt64?
-    var ramMB: Int?
-    var cpuCount: Int?
-    var diskBytes: Int64?
-    var osName: String?
-    var lastUsed: Date?
-    var reportHostIdentity: Bool?
-    var portableAutoAdapt: Bool?
-}
+private typealias MachineFile = PortableMachineManifest
 
 @MainActor
 final class Machines: ObservableObject {
@@ -119,13 +14,9 @@ final class Machines: ObservableObject {
     @Published var statusNotice: String?
 
     /// The files an exported machine folder holds; its disk is disk.img, or disk.img.hvsparse (tools/export_ios.sh packs it).
-    nonisolated static let required = ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json"]
+    nonisolated static let required = MachineStorageSafety.requiredFiles
     nonisolated static let packedDisk = "disk.img.hvsparse"
-    nonisolated static let knownMachineEntries = [
-        "disk.img", "disk.img.hvsparse", "AVPBooter.vmapple2.bin", "auxiliary.bin",
-        "machine.json", installedMarker, installingMarker, "preview.jpg",
-        "resume.hsnap", "resume.hsnap.part", "restore"
-    ]
+    nonisolated static let knownMachineEntries = MachineStorageSafety.knownMachineEntries
 
     nonisolated static var isVMRunning: Bool {
         let s = henge_vm_state()
@@ -133,9 +24,8 @@ final class Machines: ObservableObject {
     }
 
     nonisolated static func hasDisk(_ folder: URL) -> Bool {
-        let fm = FileManager.default
-        return fm.fileExists(atPath: folder.appendingPathComponent("disk.img").path)
-            || fm.fileExists(atPath: folder.appendingPathComponent(packedDisk).path)
+        MachineStorageSafety.isRegularFile(folder.appendingPathComponent("disk.img"), within: folder)
+            || MachineStorageSafety.isRegularFile(folder.appendingPathComponent(packedDisk), within: folder)
     }
 
     @Published private(set) var unpacked: Double = 0
@@ -188,15 +78,7 @@ final class Machines: ObservableObject {
     nonisolated static let installingMarker = ".installing"
 
     nonisolated static func isValidPortableFolder(_ folder: URL) -> Bool {
-        let fm = FileManager.default
-        let hasCoreFiles = fm.fileExists(atPath: folder.appendingPathComponent("disk.img").path)
-            && fm.fileExists(atPath: folder.appendingPathComponent("AVPBooter.vmapple2.bin").path)
-            && fm.fileExists(atPath: folder.appendingPathComponent("auxiliary.bin").path)
-            && fm.fileExists(atPath: folder.appendingPathComponent("machine.json").path)
-        guard hasCoreFiles else { return false }
-        let isInstalling = fm.fileExists(atPath: folder.appendingPathComponent(installingMarker).path)
-        let isInstalled = fm.fileExists(atPath: folder.appendingPathComponent(installedMarker).path)
-        return !isInstalling || isInstalled
+        MachineStorageSafety.isPortableMachineDirectory(folder)
     }
 
     nonisolated static func knownMachineBytes(in dir: URL) -> Int64 {
@@ -221,50 +103,18 @@ final class Machines: ObservableObject {
     }
 
     /// Removes only known Henge files in `dir`, never deleting unrelated user files or an external volume root.
-    nonisolated static func safelyDeleteMachineFiles(in dir: URL, allowRemovingDirectory: Bool) throws -> Int64 {
-        let fm = FileManager.default
-        var freedBytes: Int64 = 0
-        for name in knownMachineEntries {
-            let item = dir.appendingPathComponent(name)
-            guard fm.fileExists(atPath: item.path) else { continue }
-            var itemBytes: Int64 = 0
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
-                itemBytes = ExternalInstallStorage.directoryBytes(item)
-            } else {
-                let vals = try? item.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey])
-                if let allocated = vals?.totalFileAllocatedSize, allocated > 0 {
-                    itemBytes = Int64(allocated)
-                } else if let size = vals?.fileSize, size > 0 {
-                    itemBytes = Int64(size)
-                }
-            }
-            do {
-                try fm.removeItem(at: item)
-                freedBytes += itemBytes
-            } catch {
-                let nsErr = error as NSError
-                if nsErr.domain == NSCocoaErrorDomain && nsErr.code == NSFileNoSuchFileError { continue }
-                if let posixErr = error as? POSIXError, posixErr.code == .ENOENT { continue }
-                throw error
-            }
-        }
-
-        let isVol = (try? dir.resourceValues(forKeys: [.isVolumeKey]))?.isVolume ?? false
-        if allowRemovingDirectory && !isVol {
-            let remaining = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
-            if remaining.filter({ $0 != ".DS_Store" }).isEmpty {
-                try? fm.removeItem(at: dir)
-                let parent = dir.deletingLastPathComponent()
-                let parentIsVol = (try? parent.resourceValues(forKeys: [.isVolumeKey]))?.isVolume ?? false
-                if parent.lastPathComponent == "HengeMachines", !parentIsVol,
-                   let parentItems = try? fm.contentsOfDirectory(atPath: parent.path),
-                   parentItems.filter({ $0 != ".DS_Store" }).isEmpty {
-                    try? fm.removeItem(at: parent)
-                }
-            }
-        }
-        return freedBytes
+    nonisolated static func safelyDeleteMachineFiles(
+        in dir: URL,
+        allowRemovingDirectory: Bool,
+        approvedRoot: URL? = nil,
+        validating target: ExternalDriveTarget? = nil
+    ) throws -> Int64 {
+        try MachineStorageSafety.deleteMachineFiles(
+            in: dir,
+            approvedRoot: approvedRoot ?? Self.root,
+            allowRemovingDirectory: allowRemovingDirectory,
+            validating: target
+        )
     }
 
     nonisolated static func writePortableManifest(for mac: VirtualMac, in dir: URL) {
@@ -315,25 +165,33 @@ final class Machines: ObservableObject {
         let fm = FileManager.default
         let items = (try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: nil)) ?? []
         for item in items {
-            guard let id = UUID(uuidString: item.lastPathComponent), !known.contains(id) else { continue }
+            guard let id = UUID(uuidString: item.lastPathComponent), !known.contains(id),
+                  MachineStorageSafety.isSafeDirectory(item, within: Self.root) else { continue }
             let marker = item.appendingPathComponent(Self.installedMarker)
-            if fm.fileExists(atPath: marker.path), let data = try? Data(contentsOf: item.appendingPathComponent("machine.json")),
-               let info = try? JSONDecoder().decode(MachineFile.self, from: data),
-               fm.fileExists(atPath: item.appendingPathComponent("disk.img").path) {
+            if MachineStorageSafety.isRegularFile(marker, within: Self.root) {
+                guard Self.isValidPortableFolder(item),
+                      let data = try? Data(contentsOf: item.appendingPathComponent("machine.json")),
+                      let info = try? JSONDecoder().decode(MachineFile.self, from: data),
+                      info.hasValidRAM else {
+                    HengeLog.log("machines", "preserving installed machine \(id): its files or RAM configuration could not be validated")
+                    continue
+                }
                 var mac = VirtualMac(id: id, name: info.name ?? "Mac", ecid: info.ecid, seed: info.seed ?? 0,
-                                     ramMB: info.ramMB ?? Device.suggestedRAMGB * 1024, diskBytes: 64 << 30,
+                                     ramMB: info.ramMB ?? Device.adaptiveGuestRAMMB, diskBytes: 64 << 30,
                                      cpuCount: info.cpuCount)
                 let os = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 mac.osName = os.isEmpty ? nil : os
                 (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
                 all.append(mac)
                 save()
-                try? fm.removeItem(at: item.appendingPathComponent("restore"))
+                _ = try? MachineStorageSafety.removeManagedDirectory(item.appendingPathComponent("restore"), approvedRoot: Self.root)
                 HengeLog.log("machines", "\(mac.name) finished installing but was not listed: listed again")
                 continue
             }
-            HengeLog.log("machines", "removing the unfinished machine \(id)")
-            try? fm.removeItem(at: item)
+            if MachineStorageSafety.isRegularFile(item.appendingPathComponent(Self.installingMarker), within: Self.root) {
+                HengeLog.log("machines", "removing the unfinished machine \(id)")
+                _ = try? Self.safelyDeleteMachineFiles(in: item, allowRemovingDirectory: true, approvedRoot: Self.root)
+            }
         }
     }
 
@@ -355,10 +213,11 @@ final class Machines: ObservableObject {
     }
     nonisolated static func isAvailable(_ mac: VirtualMac) -> Bool {
         if mac.isExternal {
-            guard let dir = ExternalDriveRegistry.shared.machineDirectory(for: mac.id) else { return false }
-            return FileManager.default.fileExists(atPath: dir.appendingPathComponent("disk.img").path)
+            guard let dir = ExternalDriveRegistry.shared.machineDirectory(for: mac.id),
+                  let approvedRoot = ExternalDriveRegistry.shared.rootFolder(for: mac.id) else { return false }
+            return MachineStorageSafety.isRegularFile(dir.appendingPathComponent("disk.img"), within: approvedRoot)
         }
-        return FileManager.default.fileExists(atPath: directory(for: mac.id).appendingPathComponent("disk.img").path)
+        return MachineStorageSafety.isRegularFile(directory(for: mac.id).appendingPathComponent("disk.img"), within: Self.root)
     }
     /// Where Finder file sharing puts what the user drops on Henge.
     nonisolated static var inbox: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
@@ -386,11 +245,25 @@ final class Machines: ObservableObject {
     }
 
     private func adopt(_ folder: URL, move: Bool) async {
+        var createdDirectory: URL?
         do {
+            let approvedSource = move ? Self.inbox : folder
+            guard MachineStorageSafety.isSafeDirectory(folder, within: approvedSource) else {
+                throw message("資料夾包含不安全的符號連結，無法匯入。")
+            }
+            let missing = Self.required.filter {
+                !MachineStorageSafety.isRegularFile(folder.appendingPathComponent($0), within: approvedSource)
+            }
+            let rawDisk = folder.appendingPathComponent("disk.img")
+            let packedDisk = folder.appendingPathComponent(Self.packedDisk)
+            let hasRawDisk = MachineStorageSafety.isRegularFile(rawDisk, within: approvedSource)
+            let hasPackedDisk = MachineStorageSafety.isRegularFile(packedDisk, within: approvedSource)
+            guard missing.isEmpty, hasRawDisk || hasPackedDisk else {
+                throw message("資料夾缺少必要的一般檔案：\((missing + ((hasRawDisk || hasPackedDisk) ? [] : ["disk.img"])).joined(separator: ", "))。")
+            }
             let data = try Data(contentsOf: folder.appendingPathComponent("machine.json"))
             let info = try JSONDecoder().decode(MachineFile.self, from: data)
-            let missing = Self.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
-            guard missing.isEmpty, Self.hasDisk(folder) else { throw message("資料夾缺少必要檔案：\((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", "))。") }
+            guard info.hasValidRAM else { throw message("machine.json 的記憶體設定無效，必須介於 1024 至 16384 MB。") }
             var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: info.ecid, seed: info.seed ?? 0,
                                  ramMB: info.ramMB ?? 2048, diskBytes: 0, cpuCount: info.cpuCount)
             importing = mac.name
@@ -398,32 +271,46 @@ final class Machines: ObservableObject {
             let dest = mac.directory
             let fm = FileManager.default
             try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+            createdDirectory = dest
+            try Data().write(to: dest.appendingPathComponent(Self.installingMarker))
             excludeFromBackup()
-            for name in ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json", "disk.img"] {
+            for name in Self.required {
                 let from = folder.appendingPathComponent(name)
-                guard fm.fileExists(atPath: from.path) else { continue }
-                if move { try fm.moveItem(at: from, to: dest.appendingPathComponent(name)) }
-                else { try fm.copyItem(at: from, to: dest.appendingPathComponent(name)) }
+                try fm.copyItem(at: from, to: dest.appendingPathComponent(name))
             }
-            let packed = folder.appendingPathComponent(Self.packedDisk)
-            if fm.fileExists(atPath: packed.path) {
+            if hasRawDisk {
+                if move { try fm.moveItem(at: rawDisk, to: mac.disk) }
+                else { try fm.copyItem(at: rawDisk, to: mac.disk) }
+            } else {
                 // Off the main thread: unpacking tens of gigabytes takes minutes.
-                let target = mac.disk.path, source = packed.path
+                let target = mac.disk.path, source = packedDisk.path
                 let ok = await Task.detached { () -> Bool in
                     hv_sparse_unpack(source, target, { done, total, _ in
                         let fraction = Double(done) / Double(max(total, 1))
                         Task { @MainActor in Machines.shared.unpacked = fraction }
                     }, nil) == 0
                 }.value
-                guard ok else { try? fm.removeItem(at: dest); throw message("無法解開壓縮磁碟映像（可能是剩餘空間不足）。") }
-                if move { try? fm.removeItem(at: packed) }
+                guard ok else { throw message("無法解開壓縮磁碟映像（可能是剩餘空間不足）。") }
             }
-            if move { try? fm.removeItem(at: folder) }
+            _ = try? MachineStorageSafety.removeRegularFile(dest.appendingPathComponent(Self.installingMarker), approvedRoot: Self.root)
+            Self.writePortableManifest(for: mac, in: dest)
+            if move {
+                for name in Self.required {
+                    _ = try? MachineStorageSafety.removeRegularFile(folder.appendingPathComponent(name), approvedRoot: approvedSource)
+                }
+                if !hasRawDisk {
+                    _ = try? MachineStorageSafety.removeRegularFile(packedDisk, approvedRoot: approvedSource)
+                }
+                MachineStorageSafety.removeEmptyDirectory(folder, within: approvedSource)
+            }
             mac.diskBytes = (try? fm.attributesOfItem(atPath: mac.disk.path)[.size] as? Int64) ?? 0
             all.append(mac)
             save()
             HengeLog.log("machines", "imported \(mac.name) (ECID \(mac.ecid), \(mac.diskBytes >> 30) GB disk)")
         } catch {
+            if let createdDirectory {
+                _ = try? Self.safelyDeleteMachineFiles(in: createdDirectory, allowRemovingDirectory: true, approvedRoot: Self.root)
+            }
             lastError = error.localizedDescription
             HengeLog.log("machines", "import of \(folder.lastPathComponent) failed: \(error.localizedDescription)")
         }
@@ -458,12 +345,22 @@ final class Machines: ObservableObject {
         }
         let fm = FileManager.default
         let exports = Self.inbox.appendingPathComponent("Exports", isDirectory: true)
-        let safeName = mac.name.replacingOccurrences(of: "/", with: "-")
+        try fm.createDirectory(at: exports, withIntermediateDirectories: true)
+        guard MachineStorageSafety.isSafeDirectory(exports, within: Self.inbox) else {
+            throw message("匯出資料夾包含不安全的符號連結，未執行匯出。")
+        }
+        let safeName = MachineStorageSafety.exportFolderName(mac.name, fallbackID: mac.id)
         let final = exports.appendingPathComponent(safeName, isDirectory: true)
-        // Not under its final name until it is whole, so a cut-short export can't be mistaken for a Mac.
-        let partial = exports.appendingPathComponent(safeName + ".partial", isDirectory: true)
-        try? fm.removeItem(at: partial)
-        try? fm.removeItem(at: final)
+        // Each attempt keeps a unique staging folder, including complete exports from a failed commit.
+        let partial = exports.appendingPathComponent(UUID().uuidString + ".moving", isDirectory: true)
+        if fm.fileExists(atPath: final.path) {
+            guard MachineStorageSafety.isOwnedMachineDirectory(
+                final, within: Self.inbox, matchingECID: mac.ecid
+            ),
+                  MachineStorageSafety.containsOnlyMachineEntries(final, within: Self.inbox) else {
+                throw message("匯出目的資料夾含有未知檔案，未覆寫或刪除既有資料。")
+            }
+        }
         let used = Int(mac.bytesUsed)
         let free = ExternalInstallStorage.volumeFreeBytes(at: Self.inbox)
         let needed = Int64(used) + (256 << 20)
@@ -471,11 +368,17 @@ final class Machines: ObservableObject {
             throw message("匯出「\(mac.name)」需要約 \(ByteText.string(UInt64(needed))) 可用空間，這台\(Device.name)目前剩餘 \(ByteText.string(UInt64(free)))。刪除已下載的 macOS 安裝檔可釋放約 16 GB。")
         }
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
+        var packed = false
+        var backupIdentity: MachineStorageSafety.DirectoryIdentity?
         do {
+            let marker = try MachineStorageSafety.openRegularFile(
+                partial.appendingPathComponent(Self.installingMarker), approvedRoot: Self.inbox,
+                flags: O_WRONLY | O_CREAT | O_EXCL
+            )
+            close(marker)
+            Self.writePortableManifest(for: mac, in: partial)
             try fm.copyItem(at: mac.rom, to: partial.appendingPathComponent("AVPBooter.vmapple2.bin"))
             try fm.copyItem(at: mac.aux, to: partial.appendingPathComponent("auxiliary.bin"))
-            let info: [String: Any] = ["name": mac.name, "ecid": mac.ecid, "seed": mac.seed, "ramMB": mac.ramMB]
-            try JSONSerialization.data(withJSONObject: info).write(to: partial.appendingPathComponent("machine.json"))
             let source = mac.disk.path, target = partial.appendingPathComponent(Self.packedDisk).path
             let ok = await Task.detached { () -> Bool in
                 hv_sparse_pack_progress(source, target, { done, total, _ in
@@ -484,10 +387,27 @@ final class Machines: ObservableObject {
                 }, nil) == 0
             }.value
             guard ok else { throw message("磁碟無法寫入（可能是剩餘空間不足）。") }
-            try fm.moveItem(at: partial, to: final)
+            packed = true
+            _ = try MachineStorageSafety.removeRegularFile(partial.appendingPathComponent(Self.installingMarker), approvedRoot: Self.inbox)
+            Self.writePortableManifest(for: mac, in: partial)
+            backupIdentity = try MachineStorageSafety.commitMachineExport(
+                from: partial, to: final, approvedRoot: Self.inbox, matchingECID: mac.ecid
+            )
         } catch {
-            try? fm.removeItem(at: partial)
+            if !packed {
+                _ = try? Self.safelyDeleteMachineFiles(in: partial, allowRemovingDirectory: true, approvedRoot: Self.inbox)
+            }
             throw error
+        }
+        if let backupIdentity {
+            do {
+                _ = try MachineStorageSafety.deleteMachineFiles(
+                    in: partial, approvedRoot: Self.inbox, allowRemovingDirectory: true,
+                    matchingIdentity: backupIdentity
+                )
+            } catch {
+                HengeLog.log("machines", "export committed; preserving previous backup at \(partial.path): \(error.localizedDescription)")
+            }
         }
         HengeLog.log("machines", "exported \(mac.name) to \(final.path)")
         return final
@@ -567,9 +487,17 @@ final class Machines: ObservableObject {
     }
 
     @discardableResult
-    func ejectAllExternalMacs(on driveURL: URL?, markAsExplicitlyEjected: Bool = true, keepURL: URL? = nil) -> Int {
+    func ejectAllExternalMacs(
+        on driveURL: URL?,
+        markAsExplicitlyEjected: Bool = true,
+        keepURL: URL? = nil,
+        onlyDirectories: Set<String>? = nil
+    ) -> Int {
         var matchedIDs: [UUID] = []
         for mac in all where mac.isExternal {
+            if let onlyDirectories, !onlyDirectories.contains(ExternalDriveRegistry.canonicalPath(mac.directory)) {
+                continue
+            }
             if let driveURL {
                 if let root = ExternalDriveRegistry.shared.rootFolder(for: mac.id),
                    ExternalDriveRegistry.isSameVolumeOrPath(root, driveURL) {
@@ -615,16 +543,23 @@ final class Machines: ObservableObject {
         let dir = isExternal ? mac.directory : Self.directory(for: id)
         let allowRemoveDir = !isExternal || (mac.externalRelativePath != ".")
         let available = !isExternal || mac.isAvailable
+        let approvedRoot = isExternal ? ExternalDriveRegistry.shared.rootFolder(for: id) : Self.root
+        let target = isExternal ? ExternalDriveRegistry.shared.driveTarget(for: id) : nil
 
         Task.detached(priority: .userInitiated) {
             var freedBytes: Int64 = 0
             var deleteError: Error?
-            if available {
+            if available, let approvedRoot, !isExternal || target != nil {
                 do {
-                    freedBytes = try Self.safelyDeleteMachineFiles(in: dir, allowRemovingDirectory: allowRemoveDir)
+                    freedBytes = try Self.safelyDeleteMachineFiles(
+                        in: dir, allowRemovingDirectory: allowRemoveDir,
+                        approvedRoot: approvedRoot, validating: target
+                    )
                 } catch {
                     deleteError = error
                 }
+            } else {
+                deleteError = NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: "外接 SSD 無法存取，未刪除系統或移除清單項目。"])
             }
             let finalFreed = freedBytes
             let finalError = deleteError
@@ -658,31 +593,7 @@ final class Machines: ObservableObject {
     }
 
     func delete(_ id: UUID, deleteExternalFiles: Bool = false) {
-        guard !Self.isVMRunning && !isBusy else {
-            lastError = "請先將執行中的 macOS 關機並等待目前作業完成，再執行移除或刪除。"
-            return
-        }
-        if let mac = all.first(where: { $0.id == id }), mac.isExternal {
-            if !deleteExternalFiles {
-                _ = ejectExternalMac(id)
-                return
-            }
-            if mac.isAvailable {
-                let dir = mac.directory
-                let allowRemoveDir = mac.externalRelativePath != "."
-                _ = try? Self.safelyDeleteMachineFiles(in: dir, allowRemovingDirectory: allowRemoveDir)
-            }
-            ExternalDriveRegistry.shared.unregister(
-                id: id,
-                releaseEvenIfMounted: true,
-                keepURL: ExternalInstallStorage.shared.folderURL
-            )
-            clearEjectedFlag(for: id)
-        } else {
-            _ = try? Self.safelyDeleteMachineFiles(in: Self.directory(for: id), allowRemovingDirectory: true)
-        }
-        all.removeAll { $0.id == id }
-        save()
+        deleteMacAsync(id, deleteExternalFiles: deleteExternalFiles)
     }
 
     @discardableResult
@@ -704,11 +615,12 @@ final class Machines: ObservableObject {
             all[idx].externalDriveName = ExternalInstallStorage.volumeName(at: resolved.folder)
             save()
         }
-        let fm = FileManager.default
         let dir = mac.directory
-        let ok = fm.fileExists(atPath: dir.appendingPathComponent("disk.img").path)
-            && fm.fileExists(atPath: dir.appendingPathComponent("AVPBooter.vmapple2.bin").path)
-            && fm.fileExists(atPath: dir.appendingPathComponent("auxiliary.bin").path)
+        let ok = MachineStorageSafety.isSafeDirectory(dir, within: resolved.folder)
+            && Self.isValidPortableFolder(dir)
+            && ((try? Data(contentsOf: dir.appendingPathComponent("machine.json")))
+                .flatMap { try? JSONDecoder().decode(MachineFile.self, from: $0) }
+                .map { $0.hasValidRAM && $0.ecid == mac.ecid } ?? false)
         objectWillChange.send()
         return ok
     }
@@ -740,6 +652,15 @@ final class Machines: ObservableObject {
         guard let matchedDir = candidateDir else {
             ExternalDriveRegistry.shared.releaseScopeIfUnused(for: pickedURL, keepURL: ExternalInstallStorage.shared.folderURL)
             lastError = "在該資料夾中找不到「\(mac.name)」的磁碟檔案（disk.img）。"
+            return false
+        }
+        guard MachineStorageSafety.isSafeDirectory(matchedDir, within: pickedURL),
+              Self.isValidPortableFolder(matchedDir),
+              let manifestData = try? Data(contentsOf: matchedDir.appendingPathComponent("machine.json")),
+              let manifest = try? JSONDecoder().decode(MachineFile.self, from: manifestData),
+              manifest.hasValidRAM, manifest.ecid == mac.ecid else {
+            ExternalDriveRegistry.shared.releaseScopeIfUnused(for: pickedURL, keepURL: ExternalInstallStorage.shared.folderURL)
+            lastError = "該資料夾不是「\(mac.name)」的完整系統，或記憶體設定無效，未重新掛載。"
             return false
         }
         // Keep the security-scoped bookmark on pickedURL: iPadOS never grants sandbox scope to ancestors of pickedURL.
@@ -808,6 +729,7 @@ final class Machines: ObservableObject {
     }
 
     private func performMoveStorage(_ mac: VirtualMac, toExternal: Bool) async throws -> VirtualMac {
+        guard mac.isExternal != toExternal else { return mac }
         let fm = FileManager.default
         if toExternal {
             ExternalInstallStorage.shared.refreshConnection()
@@ -824,36 +746,66 @@ final class Machines: ObservableObject {
                 throw message("將「\(mac.name)」搬移至「\(driveName)」需要約 \(ByteText.string(UInt64(needed))) 可用空間，目前僅剩 \(ByteText.string(UInt64(free)))。")
             }
             let sourceDir = Self.directory(for: mac.id)
-            let targetDir = ExternalDriveRegistry.resolveMachineDirectory(in: extFolder, for: mac.id)
+            guard let target = ExternalInstallStorage.shared.currentDriveTarget(),
+                  MachineStorageSafety.isOwnedMachineDirectory(sourceDir, within: Self.root, matchingECID: mac.ecid),
+                  let machinesRoot = ExternalInstallStorage.shared.externalMachinesRoot else {
+                throw message("無法確認來源系統或外接 SSD 的存取範圍，未搬移資料。")
+            }
+            let targetDir = machinesRoot.appendingPathComponent(mac.id.uuidString, isDirectory: true)
+            try fm.createDirectory(at: machinesRoot, withIntermediateDirectories: true)
+            guard MachineStorageSafety.isSafeDirectory(machinesRoot, within: extFolder) else {
+                throw message("目的資料夾包含不安全的符號連結，未搬移資料。")
+            }
+            if fm.fileExists(atPath: targetDir.path) {
+                guard MachineStorageSafety.isOwnedMachineDirectory(targetDir, within: extFolder, matchingECID: mac.ecid),
+                      MachineStorageSafety.containsOnlyMachineEntries(targetDir, within: extFolder) else {
+                    throw message("目的資料夾含有未知檔案或其他系統，未覆寫或刪除既有資料。")
+                }
+            }
             let partialDir = targetDir.deletingLastPathComponent().appendingPathComponent(mac.id.uuidString + ".moving", isDirectory: true)
-            try? fm.removeItem(at: partialDir)
+            if fm.fileExists(atPath: partialDir.path) {
+                guard MachineStorageSafety.containsOnlyMachineEntries(partialDir, within: extFolder) else {
+                    throw message("暫存搬移資料夾含有未知檔案，未刪除既有資料。")
+                }
+                _ = try Self.safelyDeleteMachineFiles(in: partialDir, allowRemovingDirectory: true, approvedRoot: extFolder, validating: target)
+            }
             try fm.createDirectory(at: partialDir, withIntermediateDirectories: true)
+            let marker = try MachineStorageSafety.openRegularFile(
+                partialDir.appendingPathComponent(Self.installingMarker), approvedRoot: extFolder,
+                flags: O_WRONLY | O_CREAT | O_EXCL, validating: target
+            )
+            close(marker)
             do {
-                try await Self.copyMachineFiles(from: sourceDir, to: partialDir, sparseTarget: ExternalInstallStorage.shared.supportsSparseFiles) { p in
+                try await Self.copyMachineFiles(
+                    from: sourceDir, to: partialDir, sourceRoot: Self.root, targetRoot: extFolder,
+                    targetAccess: target, sparseTarget: ExternalInstallStorage.shared.supportsSparseFiles
+                ) { p in
                     Task { @MainActor in Machines.shared.moved = p }
                 }
                 if fm.fileExists(atPath: targetDir.path) {
-                    _ = try? Self.safelyDeleteMachineFiles(in: targetDir, allowRemovingDirectory: true)
-                    if fm.fileExists(atPath: targetDir.path) {
-                        try fm.removeItem(at: targetDir)
+                    guard MachineStorageSafety.containsOnlyMachineEntries(targetDir, within: extFolder) else {
+                        throw message("目的資料夾出現未知檔案，已停止搬移並保留資料。")
                     }
+                    _ = try Self.safelyDeleteMachineFiles(in: targetDir, allowRemovingDirectory: true, approvedRoot: extFolder, validating: target)
                 }
-                try fm.moveItem(at: partialDir, to: targetDir)
+                try MachineStorageSafety.promoteMachineDirectory(from: partialDir, to: targetDir, approvedRoot: extFolder, validating: target)
+                _ = try? MachineStorageSafety.removeRegularFile(targetDir.appendingPathComponent(Self.installingMarker), approvedRoot: extFolder, validating: target)
             } catch {
-                try? fm.removeItem(at: partialDir)
+                _ = try? Self.safelyDeleteMachineFiles(in: partialDir, allowRemovingDirectory: true, approvedRoot: extFolder, validating: target)
                 throw error
             }
-            ExternalDriveRegistry.shared.register(id: mac.id, folderURL: extFolder, relativePath: nil)
+            let relativePath = extFolder.lastPathComponent == "HengeMachines" ? mac.id.uuidString : "HengeMachines/\(mac.id.uuidString)"
+            ExternalDriveRegistry.shared.register(id: mac.id, folderURL: extFolder, relativePath: relativePath)
             clearEjectedFlag(for: mac.id)
             var updated = mac
             updated.externalFolderBookmark = bookmark
             updated.externalDriveName = driveName
-            updated.externalRelativePath = nil
+            updated.externalRelativePath = relativePath
             updated.autoAdaptToHost = updated.autoAdaptToHost ?? true
             Self.writePortableManifest(for: updated, in: targetDir)
             update(updated)
             if fm.fileExists(atPath: targetDir.appendingPathComponent("disk.img").path) {
-                try? fm.removeItem(at: sourceDir)
+                _ = try? Self.safelyDeleteMachineFiles(in: sourceDir, allowRemovingDirectory: true, approvedRoot: Self.root)
             }
             statusNotice = "已將「\(mac.name)」搬移至外接 SSD「\(driveName)」。"
             HengeLog.log("machines", "moved \(mac.name) to external drive \(driveName)")
@@ -868,27 +820,52 @@ final class Machines: ObservableObject {
                 throw message("將「\(mac.name)」搬回此\(Device.name)需要約 \(ByteText.string(UInt64(needed))) 可用空間，目前僅剩 \(ByteText.string(UInt64(free)))。")
             }
             let sourceDir = mac.directory
+            guard let sourceRoot = ExternalDriveRegistry.shared.rootFolder(for: mac.id),
+                  let sourceAccess = ExternalDriveRegistry.shared.driveTarget(for: mac.id) else {
+                throw message("外接 SSD 已中斷連線，未搬移資料。")
+            }
             let targetDir = Self.directory(for: mac.id)
+            if fm.fileExists(atPath: targetDir.path) {
+                guard MachineStorageSafety.isOwnedMachineDirectory(targetDir, within: Self.root, matchingECID: mac.ecid),
+                      MachineStorageSafety.containsOnlyMachineEntries(targetDir, within: Self.root) else {
+                    throw message("本機目的資料夾含有未知檔案或其他系統，未覆寫既有資料。")
+                }
+            }
             let partialDir = Self.root.appendingPathComponent(mac.id.uuidString + ".moving", isDirectory: true)
-            try? fm.removeItem(at: partialDir)
+            if fm.fileExists(atPath: partialDir.path) {
+                guard MachineStorageSafety.containsOnlyMachineEntries(partialDir, within: Self.root) else {
+                    throw message("本機暫存資料夾含有未知檔案，未刪除既有資料。")
+                }
+                _ = try Self.safelyDeleteMachineFiles(in: partialDir, allowRemovingDirectory: true, approvedRoot: Self.root)
+            }
             try fm.createDirectory(at: partialDir, withIntermediateDirectories: true)
+            let marker = try MachineStorageSafety.openRegularFile(
+                partialDir.appendingPathComponent(Self.installingMarker), approvedRoot: Self.root,
+                flags: O_WRONLY | O_CREAT | O_EXCL
+            )
+            close(marker)
             excludeFromBackup()
             do {
-                try await Self.copyMachineFiles(from: sourceDir, to: partialDir, sparseTarget: true) { p in
+                try await Self.copyMachineFiles(
+                    from: sourceDir, to: partialDir, sourceRoot: sourceRoot, targetRoot: Self.root,
+                    sourceAccess: sourceAccess, sparseTarget: true
+                ) { p in
                     Task { @MainActor in Machines.shared.moved = p }
                 }
                 if fm.fileExists(atPath: targetDir.path) {
-                    _ = try? Self.safelyDeleteMachineFiles(in: targetDir, allowRemovingDirectory: true)
-                    if fm.fileExists(atPath: targetDir.path) {
-                        try fm.removeItem(at: targetDir)
+                    guard MachineStorageSafety.containsOnlyMachineEntries(targetDir, within: Self.root) else {
+                        throw message("本機目的資料夾出現未知檔案，已停止搬移並保留資料。")
                     }
+                    _ = try Self.safelyDeleteMachineFiles(in: targetDir, allowRemovingDirectory: true, approvedRoot: Self.root)
                 }
-                try fm.moveItem(at: partialDir, to: targetDir)
+                try MachineStorageSafety.promoteMachineDirectory(from: partialDir, to: targetDir, approvedRoot: Self.root)
+                _ = try? MachineStorageSafety.removeRegularFile(targetDir.appendingPathComponent(Self.installingMarker), approvedRoot: Self.root)
             } catch {
-                try? fm.removeItem(at: partialDir)
+                _ = try? Self.safelyDeleteMachineFiles(in: partialDir, allowRemovingDirectory: true, approvedRoot: Self.root)
                 throw error
             }
             var updated = mac
+            updated.overrideRAMMB(updated.effectiveRAMMB)
             updated.externalFolderBookmark = nil
             updated.externalDriveName = nil
             updated.externalRelativePath = nil
@@ -898,7 +875,10 @@ final class Machines: ObservableObject {
             }
             update(updated)
             if fm.fileExists(atPath: targetDir.appendingPathComponent("disk.img").path) {
-                _ = try? Self.safelyDeleteMachineFiles(in: sourceDir, allowRemovingDirectory: mac.externalRelativePath != ".")
+                _ = try? Self.safelyDeleteMachineFiles(
+                    in: sourceDir, allowRemovingDirectory: mac.externalRelativePath != ".",
+                    approvedRoot: sourceRoot, validating: sourceAccess
+                )
             }
             ExternalDriveRegistry.shared.unregister(
                 id: mac.id,
@@ -914,6 +894,10 @@ final class Machines: ObservableObject {
     nonisolated private static func copyMachineFiles(
         from sourceDir: URL,
         to targetDir: URL,
+        sourceRoot: URL,
+        targetRoot: URL,
+        sourceAccess: ExternalDriveTarget? = nil,
+        targetAccess: ExternalDriveTarget? = nil,
         sparseTarget: Bool,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
@@ -922,25 +906,31 @@ final class Machines: ObservableObject {
             for name in ["AVPBooter.vmapple2.bin", "auxiliary.bin", "machine.json", installedMarker, "preview.jpg"] {
                 let src = sourceDir.appendingPathComponent(name)
                 if fm.fileExists(atPath: src.path) {
-                    try fm.copyItem(at: src, to: targetDir.appendingPathComponent(name))
+                    let input = try MachineStorageSafety.openRegularFile(src, approvedRoot: sourceRoot, validating: sourceAccess)
+                    defer { close(input) }
+                    let output = try MachineStorageSafety.openRegularFile(
+                        targetDir.appendingPathComponent(name), approvedRoot: targetRoot,
+                        flags: O_WRONLY | O_CREAT | O_EXCL, validating: targetAccess
+                    )
+                    defer { close(output) }
+                    guard fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 else {
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
                 }
             }
             let srcDisk = sourceDir.appendingPathComponent("disk.img").path
             let dstDisk = targetDir.appendingPathComponent("disk.img").path
-            let inFD = open(srcDisk, O_RDONLY)
-            guard inFD >= 0 else {
-                throw NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: "無法讀取來源 disk.img。"])
-            }
+            let inFD = try MachineStorageSafety.openRegularFile(URL(fileURLWithPath: srcDisk), approvedRoot: sourceRoot, validating: sourceAccess)
             defer { close(inFD) }
             var st = stat()
             guard fstat(inFD, &st) == 0, st.st_size > 0 else {
                 throw NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: "無法讀取磁碟大小。"])
             }
             let total = st.st_size
-            let outFD = open(dstDisk, O_CREAT | O_TRUNC | O_RDWR, 0o600)
-            guard outFD >= 0 else {
-                throw NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: "無法在目的路徑建立 disk.img。"])
-            }
+            let outFD = try MachineStorageSafety.openRegularFile(
+                URL(fileURLWithPath: dstDisk), approvedRoot: targetRoot,
+                flags: O_CREAT | O_EXCL | O_RDWR, validating: targetAccess
+            )
             defer { close(outFD) }
             guard ftruncate(outFD, total) == 0 else {
                 throw NSError(domain: "Henge", code: 1, userInfo: [NSLocalizedDescriptionKey: "剩餘空間不足，無法配置 disk.img。"])
@@ -984,7 +974,7 @@ final class Machines: ObservableObject {
                     progress(Double(offset) / Double(total))
                 }
             }
-            _ = fsync(outFD)
+            guard fsync(outFD) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         }.value
     }
 
@@ -998,10 +988,11 @@ final class Machines: ObservableObject {
         driveName: String,
         allowUpdateExisting: Bool
     ) -> VirtualMac? {
-        let fm = FileManager.default
-        guard Self.isValidPortableFolder(folder),
+        guard MachineStorageSafety.isSafeDirectory(folder, within: baseURL),
+              Self.isValidPortableFolder(folder),
               let data = try? Data(contentsOf: folder.appendingPathComponent("machine.json")),
-              let info = try? JSONDecoder().decode(MachineFile.self, from: data) else {
+              let info = try? JSONDecoder().decode(MachineFile.self, from: data),
+              info.hasValidRAM else {
             return nil
         }
         let macID = info.id ?? UUID(uuidString: folder.lastPathComponent) ?? UUID()
@@ -1012,8 +1003,8 @@ final class Machines: ObservableObject {
         let marker = folder.appendingPathComponent(Self.installedMarker)
         let markerOS = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let resolvedOS = (info.osName?.isEmpty == false) ? info.osName : (markerOS.isEmpty ? nil : markerOS)
-        let diskSize = info.diskBytes
-            ?? ((try? folder.appendingPathComponent("disk.img").resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init))
+        let diskSize = (try? folder.appendingPathComponent("disk.img").resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
+            ?? info.diskBytes.flatMap { $0 > 0 ? $0 : nil }
             ?? (64 << 30)
 
         let storedRelPath: String?
@@ -1050,7 +1041,7 @@ final class Machines: ObservableObject {
             name: info.name ?? folder.lastPathComponent,
             ecid: info.ecid,
             seed: info.seed ?? 0,
-            ramMB: info.ramMB ?? Device.suggestedRAMGB * 1024,
+            ramMB: info.ramMB ?? Device.adaptiveGuestRAMMB,
             diskBytes: diskSize,
             osName: resolvedOS,
             lastUsed: info.lastUsed,
@@ -1064,7 +1055,10 @@ final class Machines: ObservableObject {
         (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
         ExternalDriveRegistry.shared.register(id: mac.id, folderURL: baseURL, relativePath: storedRelPath)
         all.append(mac)
-        try? fm.removeItem(at: folder.appendingPathComponent("restore"))
+        _ = try? MachineStorageSafety.removeManagedDirectory(
+            folder.appendingPathComponent("restore"), approvedRoot: baseURL,
+            validating: ExternalDriveRegistry.shared.driveTarget(for: mac.id)
+        )
         Self.writePortableManifest(for: mac, in: folder)
         return mac
     }
@@ -1193,10 +1187,13 @@ final class Machines: ObservableObject {
                         HengeLog.log("machines", "re-listed external Mac \(added.name) on \(driveName)")
                     }
                 } else if !Installer.shared.busy,
-                          fm.fileExists(atPath: item.appendingPathComponent(Self.installingMarker).path),
-                          !fm.fileExists(atPath: item.appendingPathComponent(Self.installedMarker).path) {
+                          MachineStorageSafety.isRegularFile(item.appendingPathComponent(Self.installingMarker), within: baseURL),
+                          !MachineStorageSafety.isRegularFile(item.appendingPathComponent(Self.installedMarker), within: baseURL) {
                     HengeLog.log("machines", "removing unfinished external machine \(item.lastPathComponent)")
-                    try? fm.removeItem(at: item)
+                    _ = try? Self.safelyDeleteMachineFiles(
+                        in: item, allowRemovingDirectory: true, approvedRoot: baseURL,
+                        validating: ExternalInstallStorage.shared.currentDriveTarget()
+                    )
                 }
             }
         }

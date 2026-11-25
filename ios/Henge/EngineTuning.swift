@@ -9,6 +9,7 @@ enum EngineTuning {
     static let wfiSpinKey = "henge.perf.wfiSpin"
     static let fastFlushKey = "henge.perf.fastFlush"
     static let pCoreQosKey = "henge.perf.pCoreQos"
+    static let compactJitMetadataKey = "henge.perf.compactJitMetadata"
 
     static let defaults: [String: String] = [
         // 60, not 120: every frame macOS draws is emulated and replayed, so 120 Hz
@@ -20,9 +21,9 @@ enum EngineTuning {
         "HV_STATS": "10",      // seconds between engine stats lines in the log; 0 = off
     ]
 
-    static func apply() {
+    static func apply(defaults d: UserDefaults = .standard, documents: URL? = nil) {
         var env = defaults
-        let d = UserDefaults.standard
+        env["HV_COMPACT_JIT_METADATA"] = d.bool(forKey: compactJitMetadataKey) ? "1" : "0"
         if [30, 120].contains(d.integer(forKey: refreshKey)) {
             let requestedHz = d.integer(forKey: refreshKey)
             if requestedHz == 120 && Device.maxDisplayRefreshHz < 120 {
@@ -36,7 +37,7 @@ enum EngineTuning {
         if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
         if d.object(forKey: pCoreQosKey) as? Bool == false { env["HV_QOS"] = "init" }
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let docs = documents ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         // GPU command trace: on while Documents/trace-on exists (it is checked every frame, so it can be toggled live).
         env["HV_PVG_TRACE_FILE"] = docs.appendingPathComponent("trace-on").path
         let url = docs.appendingPathComponent("henge-env.txt")

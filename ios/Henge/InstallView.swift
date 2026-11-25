@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 /// Download macOS (or use a copy already on this device) and install it on a new Mac.
 struct InstallView: View {
+    @Environment(\.locale) private var interfaceLocale
     private enum InstallDialog {
         case deleteDownload(MacOSRelease)
         case ejectSSD
@@ -17,7 +18,7 @@ struct InstallView: View {
     @StateObject private var display = DisplayRouter()
     @State private var release = MacOSRelease.all.first(where: Installer.haveImage) ?? MacOSRelease.recommended
     @State private var name = "Mac"
-    @State private var ramGB = Device.suggestedRAMGB
+    @State private var ramMB = Device.adaptiveGuestRAMMB
     @State private var deleteAfter = ExternalInstallStorage.shared.mode.needsExternalDrive
     @State private var refresh = 0 // redraws the list when a download is deleted
     @State private var details = false
@@ -32,24 +33,25 @@ struct InstallView: View {
     private var dialogTitle: String {
         switch activeDialog {
         case .deleteDownload:
-            return "確定刪除這個安裝映像檔嗎？"
+            return L10n.text("確定刪除這個安裝映像檔嗎？")
         case .ejectSSD:
-            return "確定要安全退出外接 SSD 嗎？"
+            return L10n.text("確定要安全退出外接 SSD 嗎？")
         case .clearSSD(let summary):
-            return "確定清除「\(summary.driveName)」上的 Henge 資料？"
+            return L10n.format("確定清除「%@」上的 Henge 資料？", String(describing: summary.driveName))
         case .none:
             return ""
         }
     }
 
     var body: some View {
+        let _ = interfaceLocale
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
                     switch installer.phase {
                     case .idle: chooser
                     case .checking:
-                        ProgressView("正在準備安裝 macOS…")
+                        ProgressView(L10n.text("正在準備安裝 macOS…"))
                             .padding(20)
                     case .downloading, .preparing, .installing: progress
                     case .done(let text): finished(text)
@@ -61,7 +63,7 @@ struct InstallView: View {
                 .deskColumn()
             }
             .background(Desk.page)
-            .navigationTitle(installer.busy ? "安裝中" : "安裝 macOS")
+            .navigationTitle(installer.busy ? L10n.text("安裝中") : L10n.text("安裝 macOS"))
             .task {
                 while !Task.isCancelled { // the region may be claimed after a hand-off to StikDebug
                     jitReady = JITBootstrap.ready
@@ -87,23 +89,23 @@ struct InstallView: View {
             ) { dialog in
                 switch dialog {
                 case .deleteDownload(let r):
-                    Button("刪除下載檔", role: .destructive) {
+                    Button(L10n.text("刪除下載檔"), role: .destructive) {
                         Installer.deleteImage(r)
                         refresh += 1
                     }
                 case .ejectSSD:
-                    Button("安全退出 SSD（保留資料）") {
+                    Button(L10n.text("安全退出 SSD（保留資料）")) {
                         _ = extStorage.safeEjectDrive()
                         refresh += 1
                     }
                 case .clearSSD(let summary):
                     Button(
                         summary.totalBytes > 0
-                            ? "只清除 Henge 資料（釋放 \(ByteText.string(UInt64(summary.totalBytes)))）"
-                            : "確認清除 Henge 資料",
+                            ? L10n.format("只清除 Henge 資料（釋放 %@）", String(describing: ByteText.string(UInt64(summary.totalBytes))))
+                            : L10n.text("確認清除 Henge 資料"),
                         role: .destructive
                     ) {
-                        extStorage.clearAllHengeDataOnDrive { _ in
+                        extStorage.clearAllHengeDataOnDrive(confirmed: summary) { _ in
                             refresh += 1
                         }
                     }
@@ -111,14 +113,14 @@ struct InstallView: View {
             } message: { dialog in
                 switch dialog {
                 case .deleteDownload:
-                    Text("將刪除已下載的 macOS 回復映像檔，之後可隨時重新下載。")
+                    Text(L10n.text("將刪除已下載的 macOS 回復映像檔，之後可隨時重新下載。"))
                 case .ejectSSD:
-                    Text("會確認目前無執行中的虛擬機或安裝作業，釋放 Henge 對「\(extStorage.effectiveDriveName)」的存取權限與紀錄，完整保留 SSD 內的系統與所有個人資料。")
+                    Text(L10n.format("會確認目前無執行中的虛擬機或安裝作業，釋放 Henge 對「%@」的存取權限與紀錄，完整保留 SSD 內的系統與所有個人資料。", String(describing: extStorage.effectiveDriveName)))
                 case .clearSSD(let summary):
                     if summary.isEmpty {
-                        Text("目前在「\(summary.driveName)」找不到 Henge 系統或安裝暫存檔；SSD 內您的其他個人檔案皆不受影響。")
+                        Text(L10n.format("目前在「%@」找不到 Henge 系統或安裝暫存檔；SSD 內您的其他個人檔案皆不受影響。", String(describing: summary.driveName)))
                     } else {
-                        Text("只會刪除「\(summary.driveName)」上的 Henge 資料（共 \(summary.machineCount) 台 Mac\(summary.hasInstallFiles ? "、含安裝暫存檔 HengeInstall" : "")，約釋放 \(ByteText.string(UInt64(summary.totalBytes)))）。您的其他個人檔案皆會完整保留。此動作無法復原。")
+                        Text(L10n.format("只會刪除「%@」上的 Henge 資料（共 %@ 台 Mac%@，約釋放 %@）。您的其他個人檔案皆會完整保留。此動作無法復原。", String(describing: summary.driveName), String(describing: summary.machineCount), String(describing: summary.hasInstallFiles ? L10n.text("、含安裝暫存檔 HengeInstall") : ""), String(describing: ByteText.string(UInt64(summary.totalBytes)))))
                     }
                 }
             }
@@ -132,7 +134,7 @@ struct InstallView: View {
     // MARK: Choosing
 
     @ViewBuilder private var chooser: some View {
-        DeskHeading("選擇版本")
+        DeskHeading(L10n.text("選擇版本"))
         VStack(spacing: 0) {
             ForEach(MacOSRelease.all) { r in
                 HStack(spacing: 0) {
@@ -147,13 +149,13 @@ struct InstallView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("刪除 \(r.name) 安裝檔")
+                        .accessibilityLabel(L10n.format("刪除 %@ 安裝檔", String(describing: r.name)))
                         .padding(.trailing, 6)
                     }
                 }
                     .contextMenu {
                         if (Installer.haveImage(r) && Installer.isManagedImage(Installer.imagePath(r))) || Installer.partSize(r) != nil {
-                            Button("刪除下載檔", role: .destructive) { activeDialog = .deleteDownload(r) }
+                            Button(L10n.text("刪除下載檔"), role: .destructive) { activeDialog = .deleteDownload(r) }
                         }
                     }
                 if r.id != MacOSRelease.all.last?.id { Rectangle().fill(Desk.hairline).frame(height: 0.5) }
@@ -162,7 +164,7 @@ struct InstallView: View {
         .deskCard()
         .id(refresh)
 
-        DeskHeading("安裝儲存位置")
+        DeskHeading(L10n.text("安裝儲存位置"))
         VStack(spacing: 0) {
             ForEach(InstallStorageMode.allCases) { mode in
                 Button {
@@ -177,10 +179,10 @@ struct InstallView: View {
                 } label: {
                     HStack(alignment: .center, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(mode.title)
+                            Text(L10n.text(mode.title))
                                 .font(.system(size: 16, weight: .medium))
                                 .foregroundStyle(Desk.text)
-                            Text(mode.subtitle)
+                            Text(L10n.text(mode.subtitle))
                                 .font(.system(size: 13))
                                 .foregroundStyle(Desk.dim)
                                 .multilineTextAlignment(.leading)
@@ -207,7 +209,7 @@ struct InstallView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline) {
                         Label(
-                            extStorage.isConfigured ? (extStorage.configuredName ?? "外接 SSD") : "尚未選擇外接硬碟資料夾",
+                            extStorage.isConfigured ? (extStorage.configuredName ?? L10n.text("外接 SSD")) : L10n.text("尚未選擇外接硬碟資料夾"),
                             systemImage: "externaldrive.fill"
                         )
                         .font(.system(size: 15, weight: .semibold))
@@ -215,23 +217,23 @@ struct InstallView: View {
                         Spacer()
                         if extStorage.isConfigured {
                             if extStorage.isConnected {
-                                Text("已連接\(extStorage.filesystemType.map { "（\($0)）" } ?? "") • 剩餘 \(ByteText.string(UInt64(max(extStorage.freeBytes, 0))))")
+                                Text(L10n.format("已連接%@ • 剩餘 %@", String(describing: extStorage.filesystemType.map { "（\($0)）" } ?? ""), String(describing: ByteText.string(UInt64(max(extStorage.freeBytes, 0))))))
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(Desk.good)
                             } else {
-                                Text("未連接")
+                                Text(L10n.text("未連接"))
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(Desk.bad)
                             }
                         } else {
-                            Text("必選")
+                            Text(L10n.text("必選"))
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(Desk.bad)
                         }
                     }
 
                     if extStorage.mode == .externalFull && extStorage.isConnected && !extStorage.supportsSparseFiles {
-                        Text("提醒：此硬碟為 \(extStorage.filesystemType ?? "exFAT") 格式，不支援稀疏檔案（Sparse File）。完整外接模式下系統映像會直接佔滿 64 GB 且建立時需等待數分鐘；外接 SSD 建議優先格式化為 APFS。")
+                        Text(L10n.format("提醒：此硬碟為 %@ 格式，不支援稀疏檔案（Sparse File）。完整外接模式下系統映像會直接佔滿 64 GB 且建立時需等待數分鐘；外接 SSD 建議優先格式化為 APFS。", String(describing: extStorage.filesystemType ?? "exFAT")))
                             .font(.system(size: 12))
                             .foregroundStyle(Desk.warn)
                     }
@@ -239,24 +241,24 @@ struct InstallView: View {
                     if extStorage.isClearing {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("正在清除 SSD 上的 Henge 資料…")
+                            Text(L10n.text("正在清除 SSD 上的 Henge 資料…"))
                                 .font(.system(size: 13))
                                 .foregroundStyle(Desk.dim)
                         }
                     }
                     if let msg = extStorage.statusMessage {
-                        Text(msg)
+                        Text(L10n.text(msg))
                             .font(.system(size: 13))
                             .foregroundStyle(Desk.good)
                     }
                     if let err = extStorage.lastError {
-                        Text(err)
+                        Text(L10n.text(err))
                             .font(.system(size: 13))
                             .foregroundStyle(Desk.bad)
                     }
 
                     HStack(spacing: 14) {
-                        Button(extStorage.isConfigured ? "變更外接資料夾…" : "選擇外接 SSD 資料夾…") {
+                        Button(extStorage.isConfigured ? L10n.text("變更外接資料夾…") : L10n.text("選擇外接 SSD 資料夾…")) {
                             pickingExternalFolder = true
                         }
                         .font(.system(size: 15, weight: .semibold))
@@ -264,7 +266,7 @@ struct InstallView: View {
                         .disabled(extStorage.isClearing || machines.isBusy || Machines.isVMRunning)
                         Spacer()
                         if extStorage.isConfigured && !extStorage.isConnected {
-                            Button("重新偵測") {
+                            Button(L10n.text("重新偵測")) {
                                 extStorage.refreshConnection()
                                 refresh += 1
                             }
@@ -278,7 +280,7 @@ struct InstallView: View {
                             Button {
                                 activeDialog = .ejectSSD
                             } label: {
-                                Label("安全退出 SSD（保留資料）", systemImage: "eject")
+                                Label(L10n.text("安全退出 SSD（保留資料）"), systemImage: "eject")
                                     .font(.system(size: 14, weight: .medium))
                             }
                             .foregroundStyle(Desk.dim)
@@ -292,7 +294,7 @@ struct InstallView: View {
                                         activeDialog = .clearSSD(summary)
                                     }
                                 } label: {
-                                    Label("清除 SSD 資料…", systemImage: "trash")
+                                    Label(L10n.text("清除 SSD 資料…"), systemImage: "trash")
                                         .font(.system(size: 14, weight: .medium))
                                 }
                                 .foregroundStyle(Desk.bad)
@@ -308,29 +310,44 @@ struct InstallView: View {
         }
         .deskCard()
 
-        DeskHeading("新增 Mac")
+        DeskHeading(L10n.text("新增 Mac"))
         VStack(spacing: 0) {
-            TextField("名稱", text: $name)
+            TextField(L10n.text("名稱"), text: $name)
                 .font(.system(size: 16))
                 .padding(.horizontal, 17)
                 .padding(.vertical, 14)
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
-            Stepper(value: $ramGB, in: Device.memoryChoices) {
+            Stepper(value: $ramMB, in: Device.memoryChoicesMB, step: GuestRAMBudget.stepMB) {
                 HStack {
-                    Text("記憶體").font(.system(size: 16))
+                    Text(L10n.text("記憶體")).font(.system(size: 16))
                     Spacer()
-                    Text("\(ramGB) GB").font(.system(size: 16, weight: .semibold))
+                    Text(GuestRAMBudget.text(ramMB)).font(.system(size: 16, weight: .semibold))
                 }
             }
             .padding(.horizontal, 17)
             .padding(.vertical, 10)
-            if let note = Device.memoryNote(ramGB) {
-                Text(note)
+            Button {
+                ramMB = Device.adaptiveGuestRAMMB
+            } label: {
+                Label(
+                    Device.memoryBudget.physicalRAMMB > Device.memoryChoicesMB.upperBound ? L10n.text("配置設定上限（16 GB）") : L10n.text("配置全部實體 RAM"),
+                    systemImage: "memorychip.fill"
+                )
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Desk.accentLight)
+            }
+            .padding(.horizontal, 17)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            MemoryStatusView(ramMB: ramMB)
+                .padding(.horizontal, 17)
+                .padding(.bottom, 12)
+            if ramMB < 2048 {
+                Text(L10n.text("macOS 回復安裝環境至少使用 2 GB；安裝完成後依所選的記憶體配置啟動。"))
                     .font(.system(size: 13))
-                    .foregroundStyle(Desk.dim)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(Desk.warn)
                     .padding(.horizontal, 17)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 12)
             }
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
             Stepper(
@@ -341,23 +358,23 @@ struct InstallView: View {
                 in: 1...Device.maxCPUCount
             ) {
                 HStack {
-                    Text("CPU 核心數").font(.system(size: 16))
+                    Text(L10n.text("CPU 核心數")).font(.system(size: 16))
                     Spacer()
-                    Text("\(clampedCPUs) 核心").font(.system(size: 16, weight: .semibold))
+                    Text(L10n.format("%@ 核心", String(describing: clampedCPUs))).font(.system(size: 16, weight: .semibold))
                 }
             }
             .padding(.horizontal, 17)
             .padding(.vertical, 10)
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
-            Toggle(extStorage.mode.needsExternalDrive ? "安裝後自動清除安裝暫存檔" : "安裝後刪除下載映像檔", isOn: $deleteAfter)
+            Toggle(extStorage.mode.needsExternalDrive ? L10n.text("安裝後自動清除安裝暫存檔") : L10n.text("安裝後刪除下載映像檔"), isOn: $deleteAfter)
                 .font(.system(size: 16))
                 .padding(.horizontal, 17)
                 .padding(.vertical, 10)
         }
         .deskCard()
 
-        Button(Installer.haveImage(release) ? "立即安裝" : "下載並安裝") {
-            installer.start(release, name: name.isEmpty ? "Mac" : name, ramMB: ramGB * 1024, cpus: clampedCPUs, keepImage: !deleteAfter)
+        Button(Installer.haveImage(release) ? L10n.text("立即安裝") : L10n.text("下載並安裝")) {
+            installer.start(release, name: name.isEmpty ? "Mac" : name, ramMB: ramMB, cpus: clampedCPUs, keepImage: !deleteAfter)
         }
         .buttonStyle(DeskButtonStyle(enabled: canInstall))
         .disabled(!canInstall)
@@ -369,7 +386,7 @@ struct InstallView: View {
             .padding(.top, 10)
         if !jitReady && !Device.chipTooOld {
             // Before any Mac exists, this is the only place to ask for JIT (#23).
-            Button("開啟 JIT") { jit.enable() }
+            Button(L10n.text("開啟 JIT")) { jit.enable() }
                 .buttonStyle(DeskButtonStyle())
                 .padding(.top, 12)
         }
@@ -385,25 +402,25 @@ struct InstallView: View {
 
     private var spaceCaption: String {
         if Device.chipTooOld { return Device.chipTooOldText }
-        if !jitReady { return JITBootstrap.lastFailure ?? "請先開啟 JIT。\(jit.automaticDescription)" }
+        if !jitReady { return JITBootstrap.lastFailure ?? L10n.format("請先開啟 JIT。%@", String(describing: jit.automaticDescription)) }
         if extStorage.mode.needsExternalDrive {
             if !extStorage.isConfigured {
-                return "請先選擇外接 USB-C SSD 資料夾，或將安裝位置切回「本機儲存（原始模式）」。"
+                return L10n.text("請先選擇外接 USB-C SSD 資料夾，或將安裝位置切回「本機儲存（原始模式）」。")
             }
             if !extStorage.isConnected {
-                return "請先插上「\(extStorage.configuredName ?? "外接硬碟")」，或切回「本機儲存」。"
+                return L10n.format("請先插上「%@」，或切回「本機儲存」。", String(describing: extStorage.configuredName ?? L10n.text("外接硬碟")))
             }
         }
         let internalNeed = ByteText.string(UInt64(Installer.internalSpaceNeeded(release)))
         let extNeed = ByteText.string(UInt64(Installer.externalSpaceNeeded(release)))
-        let drive = extStorage.configuredName ?? "外接 SSD"
+        let drive = extStorage.configuredName ?? L10n.text("外接 SSD")
         switch extStorage.mode {
         case .internalOnly:
-            return "安裝期間請保持 Henge 開啟。需要這台 \(Device.name) 至少 \(internalNeed) 本機可用空間。"
+            return L10n.format("安裝期間請保持 Henge 開啟。需要這台 %@ 至少 %@ 本機可用空間。", String(describing: Device.name), String(describing: internalNeed))
         case .externalStaging:
-            return "安裝期間請保持連線。這台 \(Device.name) 需要約 \(internalNeed)（存放完成後的系統），「\(drive)」需約 \(extNeed)（安裝完自動清除）。"
+            return L10n.format("安裝期間請保持連線。這台 %@ 需要約 %@（存放完成後的系統），「%@」需約 %@（安裝完自動清除）。", String(describing: Device.name), String(describing: internalNeed), String(describing: drive), String(describing: extNeed))
         case .externalFull:
-            return "安裝期間請保持 Henge 開啟並維持「\(drive)」連線。外接碟需約 \(extNeed)，這台 \(Device.name) 只需約 \(internalNeed) 緩衝空間；完成後可帶到別台 iPad 隨插即用。"
+            return L10n.format("安裝期間請保持 Henge 開啟並維持「%@」連線。外接碟需約 %@，這台 %@ 只需約 %@ 緩衝空間；完成後可帶到別台 iPad 隨插即用。", String(describing: drive), String(describing: extNeed), String(describing: Device.name), String(describing: internalNeed))
         }
     }
 
@@ -412,14 +429,14 @@ struct InstallView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(r.name).font(.system(size: 16, weight: .medium)).foregroundStyle(Desk.text)
                 if let size = Installer.imageSize(r) {
-                    Text("已下載完成，\(ByteText.string(UInt64(size)))").font(.system(size: 13)).foregroundStyle(Desk.good)
+                    Text(L10n.format("已下載完成，%@", String(describing: ByteText.string(UInt64(size))))).font(.system(size: 13)).foregroundStyle(Desk.good)
                 } else if let part = Installer.partSize(r) {
-                    Text("已下載 \(ByteText.string(UInt64(part)))／共 \(ByteText.string(UInt64(r.bytes)))（支援續傳）")
+                    Text(L10n.format("已下載 %@／共 %@（支援續傳）", String(describing: ByteText.string(UInt64(part))), String(describing: ByteText.string(UInt64(r.bytes)))))
                         .font(.system(size: 13)).foregroundStyle(Desk.dim)
                 } else {
-                    Text("需下載 \(ByteText.string(UInt64(r.bytes)))").font(.system(size: 13)).foregroundStyle(Desk.dim)
+                    Text(L10n.format("需下載 %@", String(describing: ByteText.string(UInt64(r.bytes))))).font(.system(size: 13)).foregroundStyle(Desk.dim)
                 }
-                Text(r.note).font(.system(size: 13)).foregroundStyle(Desk.dim)
+                Text(L10n.text(r.note)).font(.system(size: 13)).foregroundStyle(Desk.dim)
             }
             Spacer()
             if release == r { Image(systemName: "checkmark").font(.system(size: 15, weight: .bold)).foregroundStyle(Desk.accentLight) }
@@ -431,7 +448,7 @@ struct InstallView: View {
 
     // MARK: Going
 
-    private static let stages = ["下載系統", "啟動安裝程式", "寫入 macOS", "驗證系統", "完成收尾"]
+    private static let stages = [L10n.text("下載系統"), L10n.text("啟動安裝程式"), L10n.text("寫入 macOS"), L10n.text("驗證系統"), L10n.text("完成收尾")]
 
     private var stage: Int {
         switch installer.phase {
@@ -459,13 +476,13 @@ struct InstallView: View {
         let elapsed = Date().timeIntervalSince(stageStarted)
         guard stageSeen == stage, fraction > 0.03, fraction < 1, elapsed > 10 else { return nil }
         let minutes = Int((elapsed / fraction * (1 - fraction) / 60).rounded(.up))
-        return minutes <= 1 ? "此步驟預估還需約 1 分鐘" : "此步驟預估還需約 \(minutes) 分鐘"
+        return minutes <= 1 ? L10n.text("此步驟預估還需約 1 分鐘") : L10n.format("此步驟預估還需約 %@ 分鐘", String(describing: minutes))
     }
 
     @ViewBuilder private var progress: some View {
         let activeRelease = installer.installingReleaseName.isEmpty ? release.name : installer.installingReleaseName
-        let activeTarget = installer.installingTargetLabel.isEmpty ? "這台 \(Device.name)" : installer.installingTargetLabel
-        Text("正在安裝 \(activeRelease) 至\(activeTarget)，請保持 Henge 開啟於前景。")
+        let activeTarget = installer.installingTargetLabel.isEmpty ? L10n.format("這台 %@", String(describing: Device.name)) : installer.installingTargetLabel
+        Text(L10n.format("正在安裝 %@ 至%@，請保持 Henge 開啟於前景。", String(describing: activeRelease), String(describing: activeTarget)))
             .font(.system(size: 16))
             .foregroundStyle(Desk.dim)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -477,7 +494,7 @@ struct InstallView: View {
                 Text("\(Int(fraction * 100))%")
                     .font(.system(size: 66, weight: .bold))
                     .monospacedDigit()
-                Text(timeLeft ?? "步驟 \(stage + 1)／\(Self.stages.count)")
+                Text(timeLeft ?? L10n.format("步驟 %@／%@", String(describing: stage + 1), String(describing: Self.stages.count)))
                     .font(.system(size: 15))
                     .foregroundStyle(Desk.dim)
                     .padding(.top, 2)
@@ -498,11 +515,11 @@ struct InstallView: View {
             stageStarted = Date()
         }
 
-        DeskHeading("安裝進度")
+        DeskHeading(L10n.text("安裝進度"))
         VStack(spacing: 0) {
             ForEach(Array(Self.stages.enumerated()), id: \.offset) { i, title in
                 HStack {
-                    Text(title)
+                    Text(L10n.text(title))
                         .font(.system(size: 16, weight: i == stage ? .semibold : .regular))
                         .foregroundStyle(i > stage ? Desk.faint : Desk.text)
                     Spacer()
@@ -519,7 +536,7 @@ struct InstallView: View {
         }
         .deskCard()
 
-        Button(details ? "隱藏詳細資訊" : "顯示詳細資訊") { withAnimation { details.toggle() } }
+        Button(details ? L10n.text("隱藏詳細資訊") : L10n.text("顯示詳細資訊")) { withAnimation { details.toggle() } }
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(Desk.accentLight)
             .padding(.top, 14)
@@ -541,8 +558,8 @@ struct InstallView: View {
     private func finished(_ text: String) -> some View {
         VStack(spacing: 14) {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundStyle(Desk.good).padding(.top, 8)
-            Text("安裝完成").font(.system(size: 24, weight: .bold))
-            Text(text).font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
+            Text(L10n.text("安裝完成")).font(.system(size: 24, weight: .bold))
+            Text(L10n.text(text)).font(.system(size: 15)).foregroundStyle(Desk.dim).multilineTextAlignment(.center)
         }
         .padding(20)
         .frame(maxWidth: .infinity)
@@ -552,16 +569,16 @@ struct InstallView: View {
 
     @ViewBuilder private func failed(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("安裝未完成").font(.system(size: 22, weight: .bold))
-            Text(text).font(.system(size: 15))
-            Text("請從多工上滑完全關閉 Henge 再重開後重試（每次開啟僅能初始化一次安裝）。")
+            Text(L10n.text("安裝未完成")).font(.system(size: 22, weight: .bold))
+            Text(L10n.text(text)).font(.system(size: 15))
+            Text(L10n.text("請從多工上滑完全關閉 Henge 再重開後重試（每次開啟僅能初始化一次安裝）。"))
                 .font(.system(size: 13)).foregroundStyle(Desk.dim)
-            Button("返回") { installer.reset() }.buttonStyle(DeskButtonStyle()).padding(.top, 6)
+            Button(L10n.text("返回")) { installer.reset() }.buttonStyle(DeskButtonStyle()).padding(.top, 6)
         }
         .padding(18)
         .deskCard(radius: 30)
         .padding(.top, 8)
-        DeskHeading("日誌")
+        DeskHeading(L10n.text("日誌"))
         LogTail().padding(14).frame(maxWidth: .infinity, alignment: .leading).deskCard()
     }
 }

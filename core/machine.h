@@ -1,11 +1,17 @@
 #ifndef HENGEVM_MACHINE_H
 #define HENGEVM_MACHINE_H
 
+#include <errno.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "cpu.h"
 #include "jit_region.h"
+
+typedef struct HvJitMetadata {
+    void *entries;
+} HvJitMetadata;
 
 /* Guest physical memory: RAM regions backed by host memory, and MMIO regions
    handled by device callbacks. The fast path only ever sees RAM. */
@@ -242,6 +248,7 @@ typedef struct HvMachine {
     uint64_t stop_pc;    /* tests: leave the dispatcher when pc reaches this */
     void (*stop_hook)(HvCpu *cpu); /* debugging: call this there instead of leaving */
     uint64_t stop_pc2;   /* debugging: a second such place */
+    uint64_t instance_id; /* fixed for this lifecycle, even when the machine and prewarmed JIT addresses are reused */
     uint32_t jit_gen;    /* full flushes so far, as blocks see them (HV_JIT_POISON checks) */
     int gen_checks;
     int trace;           /* print every block entered */
@@ -255,9 +262,10 @@ typedef struct HvMachine {
     HvStats stats;
     int chain;               /* block chaining and the indirect-branch cache are enabled */
     uint64_t *slots;         /* chainable exits' targets (0: not chained) */
-    uint32_t **slot_site;    /* the B in each exit's stub that chaining rewrites to jump to the target */
-    uint32_t **slot_stub;    /* what that B goes to while it isn't chained */
-    uint32_t **slot_cond;    /* a conditional branch in a block's hot part that chaining may send straight to the target too */
+    HvJitMetadata slot_site; /* the B in each exit's stub that chaining rewrites to jump to the target */
+    HvJitMetadata slot_stub; /* what that B goes to while it isn't chained */
+    HvJitMetadata slot_cond; /* a conditional branch in a block's hot part that chaining may send straight to the target too */
+    int compact_jit_metadata; /* fixed for this machine; entries hold word offset + 1 instead of pointers */
     /* Exits to another page (see put_branch_exit): the host addend the target
        page's TLB entry must hold for the exit to go straight to the chained
        block (0: a same-page exit), and once chained, the target's physical page
@@ -294,6 +302,54 @@ typedef struct HvMachine {
        still starting up: its window server never drew. */
     uint64_t cntvoff;
 } HvMachine;
+
+static inline int hv_jit_metadata_compact_supported(const HvJitRegion *jit) {
+    uintptr_t base = (uintptr_t)jit->base;
+    return base && !(base & (sizeof(uint32_t) - 1)) && jit->capacity &&
+           jit->capacity <= UINT32_MAX && jit->capacity <= (UINTPTR_MAX - base) / sizeof(uint32_t);
+}
+
+static inline size_t hv_jit_metadata_entry_bytes(const HvMachine *m) {
+    return m->compact_jit_metadata ? sizeof(uint32_t) : sizeof(uint32_t *);
+}
+
+static inline size_t hv_jit_metadata_bytes(const HvMachine *m) {
+    size_t tables = !!m->slot_site.entries + !!m->slot_stub.entries + !!m->slot_cond.entries;
+    return tables * (size_t)m->max_slots * hv_jit_metadata_entry_bytes(m);
+}
+
+static inline uint32_t *hv_jit_metadata_get(const HvMachine *m, const HvJitMetadata *table, uint32_t index) {
+    if (!table->entries || index >= m->max_slots) {
+        errno = ERANGE;
+        return NULL;
+    }
+    if (!m->compact_jit_metadata) return ((uint32_t *const *)table->entries)[index];
+    uint32_t offset = ((const uint32_t *)table->entries)[index];
+    return offset ? (uint32_t *)((uintptr_t)m->jit.base + (uintptr_t)(offset - 1) * sizeof(uint32_t)) : NULL;
+}
+
+static inline int hv_jit_metadata_set(const HvMachine *m, HvJitMetadata *table, uint32_t index, uint32_t *value) {
+    if (!table->entries || index >= m->max_slots) {
+        errno = ERANGE;
+        return -1;
+    }
+    if (!m->compact_jit_metadata) {
+        ((uint32_t **)table->entries)[index] = value;
+        return 0;
+    }
+    uint32_t offset = 0;
+    if (value) {
+        uintptr_t base = (uintptr_t)m->jit.base, address = (uintptr_t)value;
+        if (!hv_jit_metadata_compact_supported(&m->jit) || address < base ||
+            (address - base) % sizeof(uint32_t) || (address - base) / sizeof(uint32_t) >= m->jit.capacity) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        offset = (uint32_t)((address - base) / sizeof(uint32_t)) + 1;
+    }
+    ((uint32_t *)table->entries)[index] = offset;
+    return 0;
+}
 
 static inline uint32_t hv_block_hash(uint64_t va, uint64_t pa, uint32_t flags) {
     uint64_t h = (va >> 2) ^ (pa >> 2) * 0x9e3779b97f4a7c15ull ^ flags;

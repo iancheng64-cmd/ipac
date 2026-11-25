@@ -1,0 +1,894 @@
+#!/system/bin/sh
+# Only explicit start/stop change USB. Test mode is confined to a private /tmp tree.
+set -u
+
+TEST_MODE=0
+TEST_ROOT=
+if [ -n "${IPAC_PHONE_SSD_TEST_ROOT:-}" ]; then
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin
+else
+    PATH=/system/bin:/system/xbin:/vendor/bin:/sbin
+fi
+export PATH
+REAL_UID=$(id -u) || exit 1
+EXPECTED_UID=0
+EFFECTIVE_UID=$REAL_UID
+CONFIG_BASE=
+SYS_UDC=/sys/class/udc
+SYS_BLOCK=/sys/block
+SYS_MODULE=/sys/module
+PROC_CONFIG=/proc/config.gz
+PROC_MOUNTS=/proc/self/mountinfo
+BOOT_ID_PATH=/proc/sys/kernel/random/boot_id
+STATE_ROOT=/data/adb/ipac-phone-ssd
+GADGET_NAME=ipac_phone_ssd
+GADGET=
+STATE=
+LOCK=
+LOCK_HELD=0
+CREATED=0
+CREATED_ID=
+GADGET_ID=
+FUNCTION_ID=
+LUN_ID=
+PREPARING=0
+COMMITTED=0
+UDC=
+ORIGINAL=
+ORIGINAL_ID=
+IMAGE=
+SAVED_IMAGE=
+SESSION=
+BOOT_ID=
+CONFIG_MOUNT_ID=
+IMAGE_SIZE=0
+DRIVER_STATE=unknown
+DRIVER_EVIDENCE=none
+COMMAND=${1:-help}
+[ "$#" -eq 0 ] || shift
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'ipac-phone-ssd: %s\n' "$*" >&2; }
+fail() { warn "$*"; exit 1; }
+name_ok() {
+    case "$1" in ""|.*|*[!A-Za-z0-9_.:-]*) return 1;; esac
+    return 0
+}
+meta() {
+    _m=$(stat -c '%s %b %h %u %a' "$1" 2>/dev/null) ||
+        _m=$(stat -f '%z %b %l %u %Lp' "$1" 2>/dev/null) || return 1
+    case "$_m" in *[!0-9\ ]*|"") return 1;; esac
+    set -- $_m
+    [ "$#" -eq 5 ] || return 1
+    printf '%s\n' "$_m"
+}
+instance_id() {
+    test_path "$1" && [ -d "$1" ] && [ ! -L "$1" ] || return 1
+    _instance=$(stat -c '%d %i' "$1" 2>/dev/null) ||
+        _instance=$(stat -f '%d %i' "$1" 2>/dev/null) || return 1
+    case "$_instance" in *[!0-9\ ]*|"") return 1;; esac
+    set -- $_instance
+    [ "$#" -eq 2 ] && [ "$2" -gt 0 ] || return 1
+    printf '%s:%s\n' "$1" "$2"
+}
+instance_id_ok() {
+    case "$1" in ""|*[!0-9:]*|:*|*:|*:*:*) return 1;; esac
+    return 0
+}
+secure_dir() {
+    test_path "$1" || return 1
+    [ -d "$1" ] && [ ! -L "$1" ] || return 1
+    _d=$(meta "$1") || return 1
+    set -- $_d
+    [ "$4" = "$EXPECTED_UID" ] && [ "$5" = 700 ]
+}
+test_path() {
+    [ "$TEST_MODE" -eq 1 ] || return 0
+    [ "$1" != "$TEST_ROOT" ] || { [ ! -L "$1" ]; return; }
+    case "$1" in "$TEST_ROOT"/*) ;; *) return 1;; esac
+    [ ! -L "$1" ] || return 1
+    _p=$(dirname "$1")
+    [ -d "$_p" ] || return 1
+    _p=$(CDPATH= cd "$_p" 2>/dev/null && pwd -P) || return 1
+    case "$_p/" in "$TEST_ROOT/"*) return 0;; *) return 1;; esac
+}
+read_one() {
+    test_path "$1" || return 1
+    [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ] || return 1
+    _line=$(cat "$1") || return 1
+    case "$_line" in *'
+'*|*"$(printf '\r')"*) return 1;; esac
+    printf '%s\n' "$_line"
+}
+
+if [ -n "${IPAC_PHONE_SSD_TEST_ROOT:-}" ]; then
+    case "$IPAC_PHONE_SSD_TEST_ROOT" in
+        /tmp/ipac-phone-ssd-test.*|/private/tmp/ipac-phone-ssd-test.*) ;;
+        *) fail "test mode requires a private /tmp/ipac-phone-ssd-test.* tree";;
+    esac
+    [ ! -L "$IPAC_PHONE_SSD_TEST_ROOT" ] || fail "test root must not be a symlink"
+    TEST_ROOT=$(CDPATH= cd "$IPAC_PHONE_SSD_TEST_ROOT" 2>/dev/null && pwd -P) ||
+        fail "test root does not exist"
+    case "$TEST_ROOT" in
+        /tmp/ipac-phone-ssd-test.*|/private/tmp/ipac-phone-ssd-test.*) ;;
+        *) fail "test root resolves outside /tmp";;
+    esac
+    EXPECTED_UID=$REAL_UID
+    secure_dir "$TEST_ROOT" || fail "test root must be caller-owned with mode 0700"
+    case "${IPAC_PHONE_SSD_TEST_UID:-$REAL_UID}" in
+        *[!0-9]*|"") fail "invalid mock uid";;
+    esac
+    EFFECTIVE_UID=${IPAC_PHONE_SSD_TEST_UID:-$REAL_UID}
+    TEST_MODE=1
+    SYS_UDC=$TEST_ROOT/sys/class/udc
+    SYS_BLOCK=$TEST_ROOT/sys/block
+    SYS_MODULE=$TEST_ROOT/sys/module
+    PROC_CONFIG=$TEST_ROOT/proc/config.gz
+    PROC_MOUNTS=$TEST_ROOT/proc/self/mountinfo
+    BOOT_ID_PATH=$TEST_ROOT/proc/sys/kernel/random/boot_id
+    STATE_ROOT=$TEST_ROOT/data/adb/ipac-phone-ssd
+elif [ -n "${IPAC_PHONE_SSD_TEST_UID:-}" ]; then
+    fail "mock uid requires a validated fake /tmp tree"
+fi
+
+select_config() {
+    if [ "$TEST_MODE" -eq 1 ]; then
+        _cfg=$TEST_ROOT/config/usb_gadget
+        test_path "$_cfg" && [ -d "$_cfg" ] || return 1
+        CONFIG_BASE=$_cfg
+    else
+        for _cfg in /config/usb_gadget /sys/kernel/config/usb_gadget; do
+            [ -d "$_cfg" ] && [ ! -L "$_cfg" ] || continue
+            _type=$(stat -f -c '%t' "$_cfg" 2>/dev/null) || _type=
+            _typename=$(stat -f -c '%T' "$_cfg" 2>/dev/null) || _typename=
+            if [ "$_type" = 62656570 ] || [ "$_typename" = configfs ]; then
+                CONFIG_BASE=$_cfg
+                break
+            fi
+        done
+    fi
+    [ -n "$CONFIG_BASE" ] || return 1
+    GADGET=$CONFIG_BASE/$GADGET_NAME
+}
+driver_probe() {
+    DRIVER_STATE=unknown
+    DRIVER_EVIDENCE=none
+    for _g in "$CONFIG_BASE"/*; do
+        test_path "$_g" && test_path "$_g/functions" || continue
+        [ -d "$_g/functions" ] && [ ! -L "$_g" ] || continue
+        [ ! -L "$_g/functions" ] || continue
+        for _f in "$_g"/functions/mass_storage.*; do
+            test_path "$_f" || continue
+            [ -d "$_f" ] && [ ! -L "$_f" ] || continue
+            DRIVER_STATE=confirmed
+            DRIVER_EVIDENCE=existing-configfs-function
+            return
+        done
+    done
+    if test_path "$SYS_MODULE/usb_f_mass_storage" &&
+        [ -d "$SYS_MODULE/usb_f_mass_storage" ] && [ ! -L "$SYS_MODULE/usb_f_mass_storage" ]; then
+        DRIVER_STATE=confirmed
+        DRIVER_EVIDENCE=loaded-usb_f_mass_storage
+        return
+    fi
+    if test_path "$PROC_CONFIG" && [ -r "$PROC_CONFIG" ] && [ ! -L "$PROC_CONFIG" ]; then
+        _kernel=$(zcat "$PROC_CONFIG" 2>/dev/null) || _kernel=
+        if printf '%s\n' "$_kernel" | grep -qx 'CONFIG_USB_CONFIGFS_MASS_STORAGE=y'; then
+            DRIVER_STATE=confirmed
+            DRIVER_EVIDENCE=kernel-built-in-config
+        elif printf '%s\n' "$_kernel" | grep -qx '# CONFIG_USB_CONFIGFS_MASS_STORAGE is not set'; then
+            DRIVER_EVIDENCE=kernel-config-disabled
+        fi
+    fi
+}
+owner_of() {
+    _found=
+    for _g in "$CONFIG_BASE"/*; do
+        test_path "$_g" || continue
+        [ -d "$_g" ] && [ ! -L "$_g" ] || continue
+        _n=${_g##*/}
+        name_ok "$_n" || return 1
+        _b=$(read_one "$_g/UDC") || return 1
+        [ "$_b" = "$1" ] || continue
+        [ -z "$_found" ] || return 1
+        _found=$_n
+    done
+    printf '%s\n' "$_found"
+}
+choose_udc() {
+    test_path "$SYS_UDC" || return 1
+    [ -d "$SYS_UDC" ] || return 1
+    if [ -n "$UDC" ]; then
+        name_ok "$UDC" && [ -e "$SYS_UDC/$UDC" ] || return 1
+        if [ "$TEST_MODE" -eq 1 ]; then test_path "$SYS_UDC/$UDC" || return 1; fi
+        return 0
+    fi
+    _count=0
+    for _u in "$SYS_UDC"/*; do
+        [ -e "$_u" ] || continue
+        _n=${_u##*/}
+        name_ok "$_n" || return 1
+        if [ "$TEST_MODE" -eq 1 ]; then test_path "$_u" || return 1; fi
+        UDC=$_n
+        _count=$((_count + 1))
+    done
+    [ "$_count" -eq 1 ] || { UDC=; return 1; }
+}
+property() {
+    if [ "$TEST_MODE" -eq 1 ]; then
+        test_path "$TEST_ROOT/mock/properties" &&
+            [ -f "$TEST_ROOT/mock/properties" ] || return 1
+        awk -v k="$1" 'index($0,k "=")==1 {print substr($0,length(k)+2); exit}' \
+            "$TEST_ROOT/mock/properties" 2>/dev/null
+    else
+        getprop "$1" 2>/dev/null
+    fi
+}
+probe() {
+    say "mode=read-only"
+    say "root_uid=$EFFECTIVE_UID"
+    say "model=$(property ro.product.model || printf unknown)"
+    say "android=$(property ro.build.version.release || printf unknown)"
+    say "kernel=$(uname -r 2>/dev/null || printf unknown)"
+    say "bootloader_locked=$(property ro.boot.flash.locked || printf unknown)"
+    if select_config; then
+        say "configfs=$CONFIG_BASE"
+        driver_probe
+        say "mass_storage=$DRIVER_STATE"
+        say "mass_storage_evidence=$DRIVER_EVIDENCE"
+        if choose_udc; then
+            say "udc=$UDC"
+            _owner=$(owner_of "$UDC") || _owner=unknown
+            say "udc_owner=${_owner:-none}"
+            _us=$(read_one "$SYS_UDC/$UDC/state") || _us=unknown
+            say "usb_state=$_us"
+        else
+            say "udc=unknown-or-multiple"
+        fi
+    else
+        say "configfs=unknown"
+        say "mass_storage=unknown"
+    fi
+    if [ -d "$STATE_ROOT/active" ]; then
+        if secure_dir "$STATE_ROOT" && secure_dir "$STATE_ROOT/active"; then
+            _saved=$(state_value udc) || _saved=unknown
+            _now=
+            if [ -n "$GADGET" ]; then _now=$(read_one "$GADGET/UDC") || _now=; fi
+            if [ "$_saved" != unknown ] && [ "$_now" = "$_saved" ] &&
+                load_state && verify_own_gadget 1; then
+                if [ -z "$_live_image" ]; then
+                    say "saved_session=bound-media-ejected"
+                else
+                    say "saved_session=bound-not-enumeration-verified"
+                fi
+            else
+                say "saved_session=lost-binding-or-identity-mismatch-or-awaiting-restore"
+            fi
+        else
+            say "saved_session=unknown-untrusted-or-unreadable-state"
+        fi
+    else
+        say "saved_session=none"
+    fi
+    say "limitations=probe-does-not-prove-SELinux-write-access-or-iPad-compatibility"
+}
+
+read_hex() {
+    _off=$1 _len=$2
+    [ "$_off" -ge 0 ] && [ "$_len" -ge 0 ] &&
+        [ "$((_off + _len))" -le "$IMAGE_SIZE" ] || return 1
+    _raw=$(od -A n -v -t u1 -j "$_off" -N "$_len" "$IMAGE" 2>/dev/null) || return 1
+    _hex=$(printf '%s\n' "$_raw" | awk '
+        { for (i=1;i<=NF;i++) {
+            if ($i !~ /^[0-9]+$/ || $i>255) exit 1
+            printf "%02x", $i
+        }}') || return 1
+    [ "${#_hex}" -eq "$((_len * 2))" ] || return 1
+    printf '%s\n' "$_hex"
+}
+le_number() {
+    _hex=$(read_hex "$1" "$2") || return 1
+    printf '%s\n' "$_hex" | awk -v n="$2" '
+        function byte(p,a,b) {
+            a=index("0123456789abcdef",substr($0,p,1))-1
+            b=index("0123456789abcdef",substr($0,p+1,1))-1
+            return a*16+b
+        }
+        { v=0; m=1
+          for(i=0;i<n;i++) {
+            b=byte(i*2+1)
+            if(i>=4 && b!=0) exit 1
+            if(i<4) {v+=b*m; m*=256}
+          }
+          printf "%.0f\n",v
+        }'
+}
+gpt_header() {
+    _base=$(($1 * 512))
+    [ "$(read_hex "$_base" 8)" = 4546492050415254 ] || return 1
+    [ "$(le_number "$((_base + 8))" 4)" = 65536 ] || return 1
+    _hs=$(le_number "$((_base + 12))" 4) || return 1
+    [ "$_hs" -ge 92 ] && [ "$_hs" -le 512 ] || return 1
+    H_CURRENT=$(le_number "$((_base + 24))" 8) || return 1
+    H_OTHER=$(le_number "$((_base + 32))" 8) || return 1
+    H_FIRST=$(le_number "$((_base + 40))" 8) || return 1
+    H_LAST=$(le_number "$((_base + 48))" 8) || return 1
+    H_GUID=$(read_hex "$((_base + 56))" 16) || return 1
+    [ "$H_GUID" != 00000000000000000000000000000000 ] || return 1
+    H_TABLE=$(le_number "$((_base + 72))" 8) || return 1
+    H_COUNT=$(le_number "$((_base + 80))" 4) || return 1
+    H_ENTRY=$(le_number "$((_base + 84))" 4) || return 1
+    [ "$H_COUNT" -ge 1 ] && [ "$H_COUNT" -le 128 ] && [ "$H_ENTRY" -eq 128 ] || return 1
+    [ "$H_FIRST" -ge 3 ] && [ "$H_LAST" -ge "$H_FIRST" ] &&
+        [ "$H_LAST" -lt "$LAST_SECTOR" ] || return 1
+    [ "$H_CURRENT" = "$1" ] && [ "$H_OTHER" = "$2" ] || return 1
+}
+validate_image() {
+    case "$IMAGE" in "$STATE_ROOT/images/"*.img) ;; *) fail "image must be a protected $STATE_ROOT/images/*.img file";; esac
+    case "$IMAGE" in *'
+'*|*"$(printf '\r')"*) fail "image path contains a newline";; esac
+    [ -f "$IMAGE" ] && [ ! -L "$IMAGE" ] || fail "image must be a regular file, not a device, directory or symlink"
+    test_path "$IMAGE" || fail "image escapes the fake test tree"
+    _parent=$(CDPATH= cd "$(dirname "$IMAGE")" 2>/dev/null && pwd -P) || fail "image parent is unavailable"
+    [ "$_parent" = "$STATE_ROOT/images" ] || fail "image directory must not resolve through symlinks"
+    secure_dir "$_parent" || fail "image directory must be root-owned with mode 0700"
+    _im=$(meta "$IMAGE") || fail "cannot obtain image metadata"
+    set -- $_im
+    IMAGE_SIZE=$1
+    [ "$4" = "$EXPECTED_UID" ] && [ "$5" = 600 ] && [ "$3" = 1 ] ||
+        fail "image must be root-owned, mode 0600 and have exactly one hard link"
+    [ "$IMAGE_SIZE" -ge 1048576 ] && [ "$IMAGE_SIZE" -le 1099511627776 ] &&
+        [ "$((IMAGE_SIZE % 512))" -eq 0 ] || fail "image size must be 512-aligned, between 1 MiB and 1 TiB"
+    [ "$(($2 * 512))" -ge "$IMAGE_SIZE" ] || fail "sparse or filesystem-compressed images are not accepted"
+    test_path "$SYS_BLOCK" && [ -d "$SYS_BLOCK" ] && [ -r "$SYS_BLOCK" ] ||
+        fail "cannot verify loop-device exclusion"
+    for _loop in "$SYS_BLOCK"/loop*/loop/backing_file; do
+        [ -e "$_loop" ] || continue
+        test_path "$_loop" || fail "loop evidence escapes the test tree"
+        _back=$(read_one "$_loop") || fail "cannot read loop-device evidence"
+        if [ "$_back" = "$IMAGE" ] || [ "/$_back" = "$IMAGE" ]; then
+            fail "image is in use by a loop device"
+        fi
+    done
+    [ "$(read_hex "$((IMAGE_SIZE - 512))" 4)" != 6b6f6c79 ] || fail "UDIF/DMG trailers are not raw disks"
+    [ "$(read_hex 0 4)" != 73707273 ] || fail "sparse disk-image containers are not accepted"
+    [ "$(read_hex 510 2)" = 55aa ] && [ "$(read_hex 450 1)" = ee ] ||
+        fail "image is not a protective-MBR raw GPT disk"
+    LAST_SECTOR=$((IMAGE_SIZE / 512 - 1))
+    gpt_header 1 "$LAST_SECTOR" || fail "invalid or unsupported primary GPT header"
+    P_FIRST=$H_FIRST P_LAST=$H_LAST P_GUID=$H_GUID P_TABLE=$H_TABLE P_COUNT=$H_COUNT
+    _table_sectors=$(((P_COUNT * 128 + 511) / 512))
+    [ "$P_TABLE" -ge 2 ] && [ "$((P_TABLE + _table_sectors))" -le "$P_FIRST" ] ||
+        fail "primary GPT table is out of bounds"
+    P_HEX=$(read_hex "$((P_TABLE * 512))" "$((P_COUNT * 128))") || fail "unreadable primary GPT table"
+    gpt_header "$LAST_SECTOR" 1 || fail "invalid or unsupported backup GPT header"
+    [ "$H_FIRST" = "$P_FIRST" ] && [ "$H_LAST" = "$P_LAST" ] &&
+        [ "$H_GUID" = "$P_GUID" ] && [ "$H_COUNT" = "$P_COUNT" ] &&
+        [ "$H_TABLE" -gt "$P_LAST" ] &&
+        [ "$((H_TABLE + _table_sectors))" -le "$LAST_SECTOR" ] ||
+        fail "backup GPT does not match the primary or is out of bounds"
+    B_HEX=$(read_hex "$((H_TABLE * 512))" "$((H_COUNT * 128))") || fail "unreadable backup GPT table"
+    [ "$B_HEX" = "$P_HEX" ] || fail "primary and backup GPT tables differ"
+    _parts=$(printf '%s\n' "$P_HEX" | awk -v count="$P_COUNT" -v first="$P_FIRST" -v last="$P_LAST" '
+        function hexbyte(p,a,b) {
+            a=index("0123456789abcdef",substr($0,p,1))-1
+            b=index("0123456789abcdef",substr($0,p+1,1))-1
+            return a*16+b
+        }
+        function le(p,n, i,b,v,m) {
+            v=0; m=1
+            for(i=0;i<n;i++) {
+                b=hexbyte(p+i*2)
+                if(i>=4 && b!=0) return -1
+                if(i<4) {v+=b*m; m*=256}
+            }
+            return v
+        }
+        {
+            apfs=0; efi=0; az="00000000000000000000000000000000"
+            for(i=0;i<count;i++) {
+                p=1+i*256; type=substr($0,p,32)
+                if(type==az) {
+                    if(substr($0,p,256) !~ /^0+$/) exit 1
+                    continue
+                }
+                if(substr($0,p+32,32)==az || substr($0,p+96,16)!="0000000000000000") exit 1
+                s=le(p+64,8); e=le(p+80,8)
+                if(s<first || e>last || s>e) exit 1
+                if(type=="ef57347c0000aa11aa1100306543ecac") {apfs++; as=s; ae=e}
+                else if(type=="28732ac11ff8d211ba4b00a0c93ec93b") {efi++; es=s; ee=e}
+                else exit 1
+            }
+            if(apfs!=1 || efi>1 || as%8!=0 || (ae-as+1)%8!=0) exit 1
+            if(efi==1 && !(ee<as || ae<es)) exit 1
+            printf "%.0f %.0f\n",as,ae
+        }') || fail "GPT must contain one APFS data partition and at most one non-overlapping EFI partition"
+    set -- $_parts
+    [ "$#" -eq 2 ] || fail "invalid APFS partition geometry"
+    _apfs_start=$(($1 * 512)) _apfs_bytes=$(($2 * 512 - _apfs_start + 512))
+    [ "$(read_hex "$((_apfs_start + 32))" 4)" = 4e585342 ] || fail "APFS container NXSB marker is absent"
+    [ "$(le_number "$((_apfs_start + 36))" 4)" = 4096 ] || fail "unsupported APFS block size"
+    _blocks=$(le_number "$((_apfs_start + 40))" 8) || fail "invalid APFS block count"
+    [ "$_blocks" -gt 0 ] && [ "$((_blocks * 4096))" -eq "$_apfs_bytes" ] ||
+        fail "APFS container size does not match its GPT partition"
+}
+
+state_value() {
+    _file=$STATE_ROOT/active/$1
+    test_path "$_file" || return 1
+    [ -f "$_file" ] && [ ! -L "$_file" ] || return 1
+    _s=$(meta "$_file") || return 1
+    set -- $_s
+    [ "$4" = "$EXPECTED_UID" ] && [ "$5" = 600 ] && [ "$3" = 1 ] || return 1
+    read_one "$_file"
+}
+load_state() {
+    secure_dir "$STATE_ROOT/active" || return 1
+    for _field in "$STATE_ROOT/active"/* "$STATE_ROOT/active"/.[!.]* "$STATE_ROOT/active"/..?*; do
+        [ -e "$_field" ] || [ -L "$_field" ] || continue
+        case "${_field##*/}" in version|gadget|gadget_id|function_id|lun_id|udc|original|original_id|image|session|boot_id|mount_id) ;; *) return 1;; esac
+    done
+    [ "$(state_value version)" = 2 ] || return 1
+    [ "$(state_value gadget)" = "$GADGET_NAME" ] || return 1
+    GADGET_ID=$(state_value gadget_id) || return 1
+    FUNCTION_ID=$(state_value function_id) || return 1
+    LUN_ID=$(state_value lun_id) || return 1
+    instance_id_ok "$GADGET_ID" && instance_id_ok "$FUNCTION_ID" &&
+        instance_id_ok "$LUN_ID" || return 1
+    UDC=$(state_value udc) || return 1
+    name_ok "$UDC" || return 1
+    ORIGINAL=$(state_value original) || return 1
+    [ -z "$ORIGINAL" ] || name_ok "$ORIGINAL" || return 1
+    [ "$ORIGINAL" != "$GADGET_NAME" ] || return 1
+    ORIGINAL_ID=$(state_value original_id) || return 1
+    if [ -n "$ORIGINAL" ]; then
+        instance_id_ok "$ORIGINAL_ID" || return 1
+    else
+        [ -z "$ORIGINAL_ID" ] || return 1
+    fi
+    BOOT_ID=$(state_value boot_id) || return 1
+    _current_boot=$(read_boot_id) || return 1
+    [ -n "$BOOT_ID" ] && [ "$BOOT_ID" = "$_current_boot" ] || return 1
+    CONFIG_MOUNT_ID=$(state_value mount_id) || return 1
+    case "$CONFIG_MOUNT_ID" in ""|*[!0-9]*|0) return 1;; esac
+    _current_mount=$(current_mount_id) || return 1
+    [ "$CONFIG_MOUNT_ID" = "$_current_mount" ] || return 1
+    SAVED_IMAGE=$(state_value image) || return 1
+    case "$SAVED_IMAGE" in "$STATE_ROOT/images/"*.img) ;; *) return 1;; esac
+    SESSION=$(state_value session) || return 1
+    case "$SESSION" in *[!0-9a-f]*|"") return 1;; esac
+    [ "${#SESSION}" -eq 32 ] && [ "$SESSION" != 00000000000000000000000000000000 ]
+}
+erase_state() {
+    for _key in version gadget gadget_id function_id lun_id udc original original_id image session boot_id mount_id; do
+        _file=$STATE_ROOT/active/$_key
+        test_path "$_file" && [ ! -L "$_file" ] || return 1
+        rm -f "$_file" || return 1
+    done
+    rmdir "$STATE_ROOT/active"
+}
+take_lock() {
+    [ "$EFFECTIVE_UID" = 0 ] || fail "start/stop require root"
+    _parent=$(dirname "$STATE_ROOT")
+    test_path "$_parent" && [ -d "$_parent" ] && [ ! -L "$_parent" ] ||
+        fail "protected /data/adb parent is missing or unsafe"
+    _parent_meta=$(meta "$_parent") || fail "cannot verify protected /data/adb parent"
+    set -- $_parent_meta
+    [ "$4" = "$EXPECTED_UID" ] && [ "$((0$5 & 022))" -eq 0 ] ||
+        fail "protected /data/adb parent must be root-owned and not group/world writable"
+    test_path "$STATE_ROOT" || fail "state root escapes the fake tree"
+    umask 077
+    if [ ! -e "$STATE_ROOT" ]; then mkdir "$STATE_ROOT" || fail "cannot create private state directory"; fi
+    secure_dir "$STATE_ROOT" || fail "state directory must be root-owned with mode 0700"
+    STATE=$STATE_ROOT/active
+    LOCK=$STATE_ROOT/lock
+    test_path "$LOCK" || fail "invalid lock path"
+    mkdir "$LOCK" 2>/dev/null || fail "another operation or stale lock exists; inspect it, do not force takeover"
+    LOCK_HELD=1
+    test_path "$LOCK/pid" || fail "invalid operation lock"
+    printf '%s\n' "$$" > "$LOCK/pid" || fail "cannot record operation lock"
+    trap 'finalize $?' 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+save_state() {
+    [ ! -e "$STATE" ] && [ ! -L "$STATE" ] || return 1
+    mkdir "$STATE" || return 1
+    printf '2\n' > "$STATE/version" &&
+        printf '%s\n' "$GADGET_NAME" > "$STATE/gadget" &&
+        printf '%s\n' "$GADGET_ID" > "$STATE/gadget_id" &&
+        printf '%s\n' "$FUNCTION_ID" > "$STATE/function_id" &&
+        printf '%s\n' "$LUN_ID" > "$STATE/lun_id" &&
+        printf '%s\n' "$UDC" > "$STATE/udc" &&
+        printf '%s\n' "$ORIGINAL" > "$STATE/original" &&
+        printf '%s\n' "$ORIGINAL_ID" > "$STATE/original_id" &&
+        printf '%s\n' "$IMAGE" > "$STATE/image" &&
+        printf '%s\n' "$SESSION" > "$STATE/session" &&
+        printf '%s\n' "$BOOT_ID" > "$STATE/boot_id" &&
+        printf '%s\n' "$CONFIG_MOUNT_ID" > "$STATE/mount_id" || return 1
+    load_state
+}
+read_boot_id() {
+    _boot=$(read_one "$BOOT_ID_PATH") || return 1
+    case "$_boot" in ????????-????-????-????-????????????) ;; *) return 1;; esac
+    case "$_boot" in *[!0-9a-f-]*) return 1;; esac
+    [ "$(printf '%s' "$_boot" | tr -d '0123456789abcdef')" = ---- ] || return 1
+    printf '%s\n' "$_boot"
+}
+current_mount_id() {
+    test_path "$PROC_MOUNTS" && [ -f "$PROC_MOUNTS" ] &&
+        [ ! -L "$PROC_MOUNTS" ] && [ -r "$PROC_MOUNTS" ] || return 1
+    awk -v target="$CONFIG_BASE" '
+        {
+            mount=$5
+            if (mount=="/" || target==mount || index(target,mount "/")==1) {
+                if (length(mount)>=longest) {
+                    longest=length(mount); id=$1; type=""
+                    for (i=7;i<=NF;i++) if ($i=="-") {type=$(i+1); break}
+                }
+            }
+        }
+        END {
+            if (id !~ /^[0-9]+$/ || id=="0" || type!="configfs") exit 1
+            print id
+        }' "$PROC_MOUNTS"
+}
+new_session() {
+    _entropy=/dev/urandom
+    if [ "$TEST_MODE" -eq 1 ]; then
+        _entropy=$TEST_ROOT/mock/session_random
+        test_path "$_entropy" && [ -f "$_entropy" ] && [ -r "$_entropy" ] ||
+            fail "mock entropy is missing or escapes the test tree"
+    fi
+    _random=$(od -A n -v -t x1 -N 16 "$_entropy" 2>/dev/null) ||
+        fail "cannot obtain a random session identity"
+    SESSION=$(printf '%s\n' "$_random" | tr -d '[:space:]') ||
+        fail "cannot encode session identity"
+    case "$SESSION" in *[!0-9a-f]*|"") fail "invalid random session identity";; esac
+    [ "${#SESSION}" -eq 32 ] && [ "$SESSION" != 00000000000000000000000000000000 ] ||
+        fail "random session identity is incomplete or zero"
+    SAVED_IMAGE=$IMAGE
+    BOOT_ID=$(read_boot_id) || fail "cannot verify the current boot identity"
+    CONFIG_MOUNT_ID=$(current_mount_id) || fail "cannot verify the configfs mount generation"
+}
+verify_own_gadget() {
+    _allow_ejected=${1:-0}
+    test_path "$GADGET" && [ -d "$GADGET" ] && [ ! -L "$GADGET" ] || return 1
+    [ -n "$BOOT_ID" ] && [ "$BOOT_ID" = "$(read_boot_id)" ] &&
+        [ -n "$CONFIG_MOUNT_ID" ] && [ "$CONFIG_MOUNT_ID" = "$(current_mount_id)" ] || return 1
+    if [ "$PREPARING" -eq 1 ]; then
+        # Partial preparation has no saved session: prove this exact new instance.
+        [ "$CREATED" -eq 1 ] && [ "$COMMITTED" -eq 0 ] &&
+            [ ! -e "$STATE" ] && [ ! -L "$STATE" ] &&
+            [ -n "$CREATED_ID" ] && [ "$(instance_id "$GADGET")" = "$CREATED_ID" ] &&
+            [ "$(read_one "$GADGET/UDC")" = "" ] || return 1
+        if [ -n "$FUNCTION_ID" ]; then
+            [ "$(instance_id "$GADGET/functions/mass_storage.0")" = "$FUNCTION_ID" ] || return 1
+        fi
+        if [ -n "$LUN_ID" ]; then
+            [ "$(instance_id "$GADGET/functions/mass_storage.0/lun.0")" = "$LUN_ID" ] || return 1
+        fi
+        for _identity_file in "$GADGET/strings/0x409/serialnumber" "$GADGET/functions/mass_storage.0/lun.0/file"; do
+            [ -e "$_identity_file" ] || [ -L "$_identity_file" ] || continue
+            _identity_value=$(read_one "$_identity_file") || return 1
+            [ -n "$_identity_value" ] || continue
+            case "$_identity_file" in
+                */serialnumber) [ "$_identity_value" = "ipac-$SESSION" ] || return 1;;
+                */file) [ "$_identity_value" = "$SAVED_IMAGE" ] || return 1;;
+            esac
+        done
+        return 0
+    fi
+    [ -n "$SESSION" ] && [ -n "$SAVED_IMAGE" ] &&
+        [ -n "$GADGET_ID" ] && [ "$(instance_id "$GADGET")" = "$GADGET_ID" ] &&
+        [ -n "$FUNCTION_ID" ] && [ "$(instance_id "$GADGET/functions/mass_storage.0")" = "$FUNCTION_ID" ] &&
+        [ -n "$LUN_ID" ] && [ "$(instance_id "$GADGET/functions/mass_storage.0/lun.0")" = "$LUN_ID" ] &&
+        [ "$(read_one "$GADGET/strings/0x409/serialnumber")" = "ipac-$SESSION" ] || return 1
+    _live_image=$(read_one "$GADGET/functions/mass_storage.0/lun.0/file") || return 1
+    [ "$_live_image" != "$SAVED_IMAGE" ] || return 0
+    [ "$_allow_ejected" = 1 ] && [ -z "$_live_image" ]
+}
+verify_original_instance() {
+    [ -n "$ORIGINAL" ] || return 0
+    [ -n "$ORIGINAL_ID" ] &&
+        [ "$(instance_id "$CONFIG_BASE/$ORIGINAL")" = "$ORIGINAL_ID" ] ||
+        { warn "original gadget instance changed or vanished; restoration refused"; return 1; }
+}
+put() {
+    test_path "$1" && [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    if [ "$TEST_MODE" -eq 1 ] && [ "$1" = "$GADGET/UDC" ] && [ -n "$2" ]; then
+        test_path "$TEST_ROOT/mock/competitor_before_bind" &&
+            test_path "$TEST_ROOT/mock/bind_error" || return 1
+        if [ -f "$TEST_ROOT/mock/competitor_before_bind" ]; then
+            _other=$(read_one "$TEST_ROOT/mock/competitor_before_bind") || return 1
+            name_ok "$_other" || return 1
+            _other_file=$CONFIG_BASE/$_other/UDC
+            test_path "$_other_file" && [ -f "$_other_file" ] || return 1
+            printf '%s\n' "$2" > "$_other_file" || return 1
+            return 1
+        fi
+        [ ! -f "$TEST_ROOT/mock/bind_error" ] || return 1
+        _occupied=$(owner_of "$2") || return 1
+        [ -z "$_occupied" ] || return 1
+    fi
+    printf '%s\n' "$2" > "$1" || return 1
+    _readback=$(read_one "$1") || return 1
+    [ "$_readback" = "$2" ]
+}
+mock_attrs() {
+    [ "$TEST_MODE" -eq 1 ] || return 0
+    for _attr in "$@"; do
+        test_path "$_attr" || return 1
+        : > "$_attr" || return 1
+    done
+}
+prepare_gadget() {
+    [ ! -e "$GADGET" ] && [ ! -L "$GADGET" ] || fail "reserved gadget already exists; refusing to modify it"
+    test_path "$GADGET" || fail "gadget escapes the fake tree"
+    mkdir "$GADGET" || fail "cannot create configfs gadget (SELinux/configfs permission?)"
+    CREATED=1
+    PREPARING=1
+    CREATED_ID=$(instance_id "$GADGET") || fail "cannot identify the newly-created gadget"
+    GADGET_ID=$CREATED_ID
+    if [ "$TEST_MODE" -eq 1 ]; then
+        mkdir "$GADGET/strings" "$GADGET/configs" "$GADGET/functions" || fail "mock preparation failed"
+        mock_attrs "$GADGET/UDC" "$GADGET/idVendor" "$GADGET/idProduct" "$GADGET/bcdUSB" || fail "mock preparation failed"
+    fi
+    put "$GADGET/idVendor" 0x1d6b && put "$GADGET/idProduct" 0x0104 &&
+        put "$GADGET/bcdUSB" 0x0200 || fail "cannot configure gadget identifiers"
+    mkdir "$GADGET/strings/0x409" || fail "cannot create gadget strings"
+    mock_attrs "$GADGET/strings/0x409/manufacturer" "$GADGET/strings/0x409/product" "$GADGET/strings/0x409/serialnumber" ||
+        fail "mock preparation failed"
+    put "$GADGET/strings/0x409/serialnumber" "ipac-$SESSION" &&
+        put "$GADGET/strings/0x409/manufacturer" iPac &&
+        put "$GADGET/strings/0x409/product" "Phone SSD (experimental)" &&
+        [ "$(read_one "$GADGET/strings/0x409/serialnumber")" = "ipac-$SESSION" ] ||
+        fail "cannot write gadget session identity or strings"
+    mkdir "$GADGET/configs/c.1" || fail "cannot create USB configuration"
+    if [ "$TEST_MODE" -eq 1 ]; then
+        mkdir "$GADGET/configs/c.1/strings" || fail "mock preparation failed"
+        mock_attrs "$GADGET/configs/c.1/MaxPower" || fail "mock preparation failed"
+    fi
+    put "$GADGET/configs/c.1/MaxPower" 120 || fail "cannot set USB power descriptor"
+    mkdir "$GADGET/configs/c.1/strings/0x409" || fail "cannot create configuration strings"
+    mock_attrs "$GADGET/configs/c.1/strings/0x409/configuration" || fail "mock preparation failed"
+    put "$GADGET/configs/c.1/strings/0x409/configuration" "iPac USB disk" || fail "cannot write configuration strings"
+    if [ "$TEST_MODE" -eq 1 ] && [ "$DRIVER_STATE" != confirmed ]; then
+        fail "mass-storage function is unavailable"
+    fi
+    mkdir "$GADGET/functions/mass_storage.0" || fail "mass-storage function is unavailable"
+    FUNCTION_ID=$(instance_id "$GADGET/functions/mass_storage.0") ||
+        fail "cannot identify the newly-created mass-storage function"
+    if [ "$TEST_MODE" -eq 1 ]; then
+        mkdir "$GADGET/functions/mass_storage.0/lun.0" || fail "mock preparation failed"
+        mock_attrs "$GADGET/functions/mass_storage.0/lun.0/file" "$GADGET/functions/mass_storage.0/lun.0/ro" \
+            "$GADGET/functions/mass_storage.0/lun.0/removable" "$GADGET/functions/mass_storage.0/lun.0/cdrom" ||
+            fail "mock preparation failed"
+        test_path "$TEST_ROOT/mock/no_nofua" || fail "mock FUA evidence escapes the test tree"
+        if [ ! -f "$TEST_ROOT/mock/no_nofua" ]; then
+            mock_attrs "$GADGET/functions/mass_storage.0/lun.0/nofua" || fail "mock preparation failed"
+        fi
+    fi
+    _lun=$GADGET/functions/mass_storage.0/lun.0
+    LUN_ID=$(instance_id "$_lun") || fail "cannot identify the newly-created LUN"
+    put "$_lun/ro" 0 && put "$_lun/removable" 1 &&
+        put "$_lun/cdrom" 0 && put "$_lun/nofua" 0 ||
+        fail "cannot verify writable media with FUA preserved; refusing takeover"
+    put "$_lun/file" "$IMAGE" || fail "kernel cannot open the image"
+    ln -s ../../functions/mass_storage.0 "$GADGET/configs/c.1/mass_storage.0" ||
+        fail "cannot link the mass-storage function"
+    [ "$(read_one "$GADGET/UDC")" = "" ] || fail "own gadget unexpectedly bound during preparation"
+    PREPARING=0
+    verify_own_gadget || fail "new gadget session identity or backing image changed during preparation"
+}
+remove_mock_attrs() {
+    [ "$TEST_MODE" -eq 1 ] || return 0
+    for _mock_attr in "$@"; do
+        test_path "$_mock_attr" || return 1
+        rm -f "$_mock_attr" || return 1
+    done
+}
+remove_own_gadget() {
+    [ "$CREATED" -eq 1 ] || return 0
+    [ -e "$GADGET" ] || [ -L "$GADGET" ] || return 0
+    test_path "$GADGET" || return 1
+    verify_own_gadget 1 || { warn "saved session identity or backing image mismatch; gadget cleanup refused"; return 1; }
+    [ "$(read_one "$GADGET/UDC")" = "" ] || return 1
+    _link=$GADGET/configs/c.1/mass_storage.0
+    if [ -L "$_link" ]; then
+        test_path "$GADGET/configs/c.1" && [ ! -L "$GADGET/configs/c.1" ] || return 1
+        [ "$(readlink "$_link")" = ../../functions/mass_storage.0 ] || return 1
+        rm "$_link" || return 1
+    elif [ -e "$_link" ]; then
+        return 1
+    fi
+    if [ -d "$GADGET/functions/mass_storage.0" ]; then
+        _lun=$GADGET/functions/mass_storage.0/lun.0
+        if [ -f "$_lun/file" ]; then put "$_lun/file" "" || return 1; fi
+        if [ "$TEST_MODE" -eq 1 ]; then
+            for _a in file ro removable cdrom nofua; do
+                _file=$_lun/$_a
+                remove_mock_attrs "$_file" || return 1
+            done
+            rmdir "$_lun" || return 1
+        fi
+        rmdir "$GADGET/functions/mass_storage.0" || return 1
+    fi
+    if [ -d "$GADGET/configs/c.1/strings/0x409" ]; then
+        remove_mock_attrs "$GADGET/configs/c.1/strings/0x409/configuration" || return 1
+        rmdir "$GADGET/configs/c.1/strings/0x409" || return 1
+    fi
+    if [ -d "$GADGET/configs/c.1" ]; then
+        if [ "$TEST_MODE" -eq 1 ]; then
+            remove_mock_attrs "$GADGET/configs/c.1/MaxPower" || return 1
+            rmdir "$GADGET/configs/c.1/strings" || return 1
+        fi
+        rmdir "$GADGET/configs/c.1" || return 1
+    fi
+    if [ -d "$GADGET/strings/0x409" ]; then
+        if [ "$TEST_MODE" -eq 1 ]; then
+            remove_mock_attrs "$GADGET/strings/0x409/manufacturer" "$GADGET/strings/0x409/product" "$GADGET/strings/0x409/serialnumber" ||
+                return 1
+        fi
+        rmdir "$GADGET/strings/0x409" || return 1
+    fi
+    if [ "$TEST_MODE" -eq 1 ]; then
+        remove_mock_attrs "$GADGET/UDC" "$GADGET/idVendor" "$GADGET/idProduct" "$GADGET/bcdUSB" || return 1
+        rmdir "$GADGET/strings" "$GADGET/configs" "$GADGET/functions" || return 1
+    fi
+    rmdir "$GADGET" || return 1
+    CREATED=0
+}
+restore_original() {
+    [ -n "$ORIGINAL" ] || return 0
+    verify_original_instance || return 1
+    _owner=$(owner_of "$UDC") || return 1
+    [ "$_owner" != "$ORIGINAL" ] || return 0
+    [ -z "$_owner" ] || { warn "controller belongs to $_owner; original binding NOT restored"; return 1; }
+    _old=$CONFIG_BASE/$ORIGINAL/UDC
+    test_path "$_old" && [ -f "$_old" ] && [ ! -L "$_old" ] || return 1
+    [ "$(read_one "$_old")" = "" ] || return 1
+    _owner=$(owner_of "$UDC") || return 1
+    [ -z "$_owner" ] || return 1
+    put "$_old" "$UDC" || return 1
+    [ "$(owner_of "$UDC")" = "$ORIGINAL" ]
+}
+unbind_own() {
+    [ -e "$GADGET" ] || [ -L "$GADGET" ] || return 0
+    test_path "$GADGET" || return 1
+    verify_own_gadget 1 || { warn "saved session identity or backing image mismatch; USB unbind refused"; return 1; }
+    _bound=$(read_one "$GADGET/UDC") || return 1
+    [ -n "$_bound" ] || return 0
+    [ "$_bound" = "$UDC" ] && [ "$(owner_of "$UDC")" = "$GADGET_NAME" ] || return 1
+    put "$GADGET/UDC" ""
+}
+rollback() {
+    verify_original_instance || { warn "original instance mismatch; rollback left USB and saved state untouched"; return 1; }
+    unbind_own && remove_own_gadget || { warn "own gadget cleanup failed; inspect saved state"; return 1; }
+    if [ -d "$STATE" ]; then
+        load_state && restore_original && erase_state ||
+            { warn "saved binding retained; original restoration could not be completed safely"; return 1; }
+    fi
+}
+finalize() {
+    _rc=$1
+    trap - 0 INT TERM
+    if [ "$COMMITTED" -eq 0 ] && [ "$CREATED" -eq 1 ]; then
+        rollback || _rc=1
+    fi
+    if [ "$LOCK_HELD" -eq 1 ]; then
+        _pid=$(read_one "$LOCK/pid") || _pid=
+        if secure_dir "$LOCK" && [ "$_pid" = "$$" ]; then
+            remove_mock_attrs "$LOCK/pid" || _rc=1
+            if [ "$TEST_MODE" -eq 0 ]; then rm -f "$LOCK/pid" || _rc=1; fi
+            rmdir "$LOCK" || _rc=1
+        else
+            warn "operation lock was changed; leaving it untouched"
+            _rc=1
+        fi
+    fi
+    exit "$_rc"
+}
+start() {
+    [ "$ACK" -eq 1 ] || fail "start requires --ack-sole-writer (image must not be mounted or written elsewhere)"
+    take_lock
+    [ ! -e "$STATE" ] && [ ! -L "$STATE" ] || fail "saved state exists; run stop or inspect it first"
+    select_config || fail "a verified configfs USB gadget mount is unavailable"
+    choose_udc || fail "controller is missing/ambiguous; specify --udc NAME"
+    driver_probe
+    validate_image
+    ORIGINAL=$(owner_of "$UDC") || fail "cannot establish the current controller owner"
+    [ "$ORIGINAL" != "$GADGET_NAME" ] || fail "reserved gadget is already bound"
+    if [ -n "$ORIGINAL" ] && [ "$TAKEOVER" -ne 1 ]; then
+        fail "controller is busy ($ORIGINAL); default is refusal, not implicit takeover"
+    fi
+    ORIGINAL_ID=
+    if [ -n "$ORIGINAL" ]; then
+        ORIGINAL_ID=$(instance_id "$CONFIG_BASE/$ORIGINAL") ||
+            fail "cannot identify the original gadget instance"
+    fi
+    new_session
+    prepare_gadget
+    [ "$(owner_of "$UDC")" = "$ORIGINAL" ] || fail "controller owner changed during preparation"
+    save_state || fail "cannot persist private restoration state"
+    verify_own_gadget && verify_original_instance ||
+        fail "prepared session or original gadget instance changed; refusing takeover"
+    if [ -n "$ORIGINAL" ]; then
+        warn "--takeover: USB/ADB will disconnect; a vendor HAL may reclaim the controller"
+        _old=$CONFIG_BASE/$ORIGINAL/UDC
+        [ "$(read_one "$_old")" = "$UDC" ] && [ "$(owner_of "$UDC")" = "$ORIGINAL" ] ||
+            fail "original owner changed before unbind"
+        put "$_old" "" || fail "cannot unbind the confirmed original gadget"
+    fi
+    [ "$(owner_of "$UDC")" = "" ] || fail "controller was claimed by another owner"
+    put "$GADGET/UDC" "$UDC" || fail "own binding failed or the controller was claimed"
+    [ "$(owner_of "$UDC")" = "$GADGET_NAME" ] || fail "vendor HAL/controller race detected"
+    if [ "$TEST_MODE" -eq 0 ]; then sleep 1; fi
+    [ "$(read_one "$GADGET/UDC")" = "$UDC" ] &&
+        [ "$(owner_of "$UDC")" = "$GADGET_NAME" ] ||
+        fail "binding did not persist; refusing to report success"
+    COMMITTED=1
+    say "gadget=bound"
+    say "udc=$UDC"
+    say "image=$IMAGE"
+    say "fua=preserved"
+    say "verification=iPad-enumeration-and-long-run-not-verified"
+}
+stop() {
+    take_lock
+    select_config || fail "verified configfs USB gadget mount is unavailable"
+    [ -d "$STATE" ] || { COMMITTED=1; say "saved_session=none; no USB changes made"; return; }
+    load_state || fail "saved state is invalid/untrusted; refusing to use it"
+    test_path "$SYS_UDC/$UDC" || fail "saved controller escapes the test tree"
+    [ -e "$SYS_UDC/$UDC" ] || fail "saved controller is no longer present"
+    if ! verify_original_instance; then
+        COMMITTED=1
+        fail "original gadget instance changed; no USB or saved state changes made"
+    fi
+    if [ -e "$GADGET" ] || [ -L "$GADGET" ]; then
+        if ! verify_own_gadget 1; then
+            COMMITTED=1
+            fail "saved session identity or backing image mismatch; no USB or saved state changes made"
+        fi
+        CREATED=1
+        unbind_own || fail "own binding changed; refusing to disconnect an unrelated controller"
+        remove_own_gadget || fail "own gadget has unexpected contents or cannot be safely removed"
+    fi
+    if ! restore_original; then
+        COMMITTED=1
+        fail "own gadget is stopped; saved restoration state retained (third-party owner or restore failure)"
+    fi
+    erase_state || fail "cannot remove completed restoration state"
+    COMMITTED=1
+    say "gadget=stopped"
+    say "restored_owner=${ORIGINAL:-none}"
+}
+usage() {
+    say "ipac-phone-ssd probe [--udc NAME]"
+    say "ipac-phone-ssd start IMAGE.img --ack-sole-writer [--udc NAME] [--takeover]"
+    say "ipac-phone-ssd stop"
+    say "Experimental manual tool: never exports userdata, flashes kernels, or disables SELinux."
+    say "Image checks are bounded sanity checks, not GPT CRC validation or APFS fsck."
+}
+ACK=0
+TAKEOVER=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --udc)
+            [ "$#" -ge 2 ] || fail "--udc requires a name"
+            UDC=$2; shift 2;;
+        --ack-sole-writer) ACK=1; shift;;
+        --takeover) TAKEOVER=1; shift;;
+        --*) fail "unknown option: $1";;
+        *)
+            [ "$COMMAND" = start ] && [ -z "$IMAGE" ] || fail "unexpected argument"
+            IMAGE=$1; shift;;
+    esac
+done
+case "$COMMAND" in
+    probe) [ "$ACK" -eq 0 ] && [ "$TAKEOVER" -eq 0 ] || fail "probe has no mutation options"; probe;;
+    start) [ -n "$IMAGE" ] || fail "start requires IMAGE.img"; start;;
+    stop) [ -z "$UDC" ] && [ "$ACK" -eq 0 ] && [ "$TAKEOVER" -eq 0 ] || fail "stop uses saved state, not caller-supplied ownership"; stop;;
+    help|-h|--help) usage;;
+    *) fail "unknown command";;
+esac

@@ -19,6 +19,7 @@ extern void hv_ijc_thunk(void);
 extern void hv_xjump_thunk(void);
 
 static int init_rest(HvMachine *m);
+static uint64_t next_instance_id;
 
 int hv_knob[HV_K_COUNT];
 static const char *const hv_knob_names[HV_K_COUNT] = {"HV_NO_RAS", "HV_SUPERBLOCKS", "HV_GROUPS", "HV_WFI_SPIN", "HV_FLUSH", "HV_K1", "HV_K2", "HV_K3", "HV_TLBT", "HV_JIT_CAP", "HV_RECHECK", "HV_SYNC_WAIT", "HV_SWITCH_FLUSH", "HV_RANGE_DROP", "HV_MOVIMM", "HV_PREDSTAT", "HV_WALK_LOG", "HV_HOIST_CHECK", "HV_IJC_PAGES", "HV_DNS_PROXY"};
@@ -60,6 +61,7 @@ int hv_machine_init_jit(HvMachine *m, void *rx, void *rw, size_t jit_bytes) {
 }
 
 static int init_rest(HvMachine *m) {
+    m->instance_id = __atomic_add_fetch(&next_instance_id, 1, __ATOMIC_RELAXED);
     pthread_mutex_init(&m->big_mu, NULL);
     pthread_cond_init(&m->big_cv, NULL);
     pthread_mutexattr_t ra;
@@ -101,6 +103,13 @@ static int init_rest(HvMachine *m) {
     /* As many blocks as the region holds (a block is at least ~160 bytes of
        code), so the region filling, not this table, is what flushes; two
        chainable exits each at most. Untouched entries cost nothing. */
+    const char *compact = getenv("HV_COMPACT_JIT_METADATA");
+    m->compact_jit_metadata = compact && atoi(compact) != 0;
+    if (m->compact_jit_metadata && !hv_jit_metadata_compact_supported(&m->jit)) {
+        fprintf(stderr, "hengevm: compact JIT metadata cannot represent this JIT region\n");
+        errno = EOVERFLOW;
+        return -1;
+    }
     size_t bytes = m->jit.capacity * sizeof(uint32_t);
     m->max_blocks = (uint32_t)(bytes / 160 < 4096 ? 4096 : bytes / 160);
     m->max_slots = m->max_blocks * 2;
@@ -110,13 +119,14 @@ static int init_rest(HvMachine *m) {
     m->stop_pc2 = ~0ull;
     m->chain = 1;
     m->slots = calloc(m->max_slots, sizeof *m->slots);
-    m->slot_site = calloc(m->max_slots, sizeof *m->slot_site);
-    m->slot_stub = calloc(m->max_slots, sizeof *m->slot_stub);
-    m->slot_cond = calloc(m->max_slots, sizeof *m->slot_cond);
+    size_t metadata_entry = hv_jit_metadata_entry_bytes(m);
+    m->slot_site.entries = calloc(m->max_slots, metadata_entry);
+    m->slot_stub.entries = calloc(m->max_slots, metadata_entry);
+    m->slot_cond.entries = calloc(m->max_slots, metadata_entry);
     m->slot_xa = calloc(m->max_slots, sizeof *m->slot_xa);
     m->slot_xpa = calloc(m->max_slots, sizeof *m->slot_xpa);
     m->slot_xnext = calloc(m->max_slots, sizeof *m->slot_xnext);
-    if (!m->slots || !m->slot_site || !m->slot_stub || !m->slot_cond || !m->slot_xa || !m->slot_xpa || !m->slot_xnext) return -1;
+    if (!m->slots || !m->slot_site.entries || !m->slot_stub.entries || !m->slot_cond.entries || !m->slot_xa || !m->slot_xpa || !m->slot_xnext) return -1;
     for (int i = 0; i < HV_MAX_CPUS; i++) { /* untouched pages cost nothing, so every CPU gets its tables now */
         HvPerCpu *p = &m->percpu[i];
         p->ijc = calloc(HV_IJC_TABLES * HV_IJC_TABLE_BYTES / 8, 8);
@@ -398,9 +408,9 @@ void hv_machine_free(HvMachine *m) {
         }
     }
     free(m->slots);
-    free(m->slot_site);
-    free(m->slot_stub);
-    free(m->slot_cond);
+    free(m->slot_site.entries);
+    free(m->slot_stub.entries);
+    free(m->slot_cond.entries);
     free(m->slot_xa);
     free(m->slot_xpa);
     free(m->slot_xnext);
@@ -484,9 +494,10 @@ void hv_invalidate_code(HvMachine *m, uint64_t pa) {
         m->slot_xnext[idx] = 0;
         m->slot_xpa[idx] = 0;
         __atomic_store_n(&m->slots[idx], 0, __ATOMIC_RELEASE);
-        uint32_t *site = m->slot_site[idx];
+        uint32_t *site = hv_jit_metadata_get(m, &m->slot_site, idx);
         if (site) {
-            uint32_t insn = 0x14000000u | (uint32_t)((m->slot_stub[idx] - site) & 0x3ffffff); /* back to its stub */
+            uint32_t *stub = hv_jit_metadata_get(m, &m->slot_stub, idx);
+            uint32_t insn = 0x14000000u | (uint32_t)((stub - site) & 0x3ffffff); /* back to its stub */
             hv_jit_write(&m->jit, site, &insn, 4);
             hv_jit_finish(&m->jit, site, 1);
         }

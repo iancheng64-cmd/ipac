@@ -17,33 +17,33 @@ enum InstallStorageMode: String, CaseIterable, Identifiable, Codable {
     var title: String {
         switch self {
         case .internalOnly:
-            return "本機儲存（原始模式）"
+            return L10n.text("本機儲存（原始模式）")
         case .externalStaging:
-            return "外接安裝 → 存回本機"
+            return L10n.text("外接安裝 → 存回本機")
         case .externalFull:
-            return "完整外接 SSD（隨身模式）"
+            return L10n.text("完整外接 SSD（隨身模式）")
         }
     }
 
     var shortTitle: String {
         switch self {
         case .internalOnly:
-            return "此 \(Device.name)"
+            return L10n.format("此 %@", Device.name)
         case .externalStaging:
-            return "外接安裝 → \(Device.name)"
+            return L10n.format("外接安裝 → %@", Device.name)
         case .externalFull:
-            return "完整外接 SSD"
+            return L10n.text("完整外接 SSD")
         }
     }
 
     var subtitle: String {
         switch self {
         case .internalOnly:
-            return "原始模式：直接在此 \(Device.name) 內部空間下載並安裝 macOS。"
+            return L10n.format("原始模式：直接在此 %@ 內部空間下載並安裝 macOS。", Device.name)
         case .externalStaging:
-            return "適合 64 GB \(Device.name)：將 12–24 GB 安裝檔與暫存檔放在外接硬碟，安裝完成後自動清除，最後成品留在 \(Device.name) 內可拔除硬碟使用。"
+            return L10n.format("適合 64 GB %@：將 12–24 GB 安裝檔與暫存檔放在外接硬碟，安裝完成後自動清除，最後成品留在 %@ 內可拔除硬碟使用。", Device.name, Device.name)
         case .externalFull:
-            return "將安裝檔與整個 Mac 系統（64 GB disk.img）都放在外接 SSD，幾乎不佔 \(Device.name) 本機空間，插上別台 iPad 也能直接開機執行。"
+            return L10n.format("將安裝檔與整個 Mac 系統（64 GB disk.img）都放在外接 SSD，幾乎不佔 %@ 本機空間，插上別台 iPad 也能直接開機執行。", Device.name)
         }
     }
 
@@ -62,6 +62,7 @@ final class ExternalDriveRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private var folders: [UUID: URL] = [:]
     private var relativePaths: [UUID: String] = [:]
+    private var driveTargets: [UUID: ExternalDriveTarget] = [:]
     private var activeScopesByPath: [String: URL] = [:]
 
     private init() {}
@@ -180,9 +181,15 @@ final class ExternalDriveRegistry: @unchecked Sendable {
 
     func register(id: UUID, folderURL: URL, relativePath: String? = nil) {
         _ = retainScope(for: folderURL)
+        let captured = ExternalDriveTarget.capture(rootURL: folderURL, displayName: folderURL.lastPathComponent)
         lock.lock()
         let previous = folders[id]
         folders[id] = folderURL
+        if let existing = driveTargets[id], existing.canonicalPath == Self.canonicalPath(folderURL), existing.isAvailable {
+            driveTargets[id] = existing
+        } else {
+            driveTargets[id] = captured
+        }
         if let relativePath {
             relativePaths[id] = relativePath
         } else {
@@ -198,6 +205,7 @@ final class ExternalDriveRegistry: @unchecked Sendable {
         lock.lock()
         let old = folders.removeValue(forKey: id)
         relativePaths.removeValue(forKey: id)
+        driveTargets.removeValue(forKey: id)
         lock.unlock()
         if let old {
             if releaseEvenIfMounted {
@@ -214,12 +222,22 @@ final class ExternalDriveRegistry: @unchecked Sendable {
         return folders[id]
     }
 
+    func driveTarget(for id: UUID) -> ExternalDriveTarget? {
+        lock.lock()
+        let target = driveTargets[id]
+        lock.unlock()
+        return target?.isAvailable == true ? target : nil
+    }
+
     /// Resolves the machine directory for `id` using an optional stored `relativePath`, or by probing
     /// `<Drive>/HengeMachines/<id>`, `<Drive>/<id>`, `<Drive>` itself, or `<Drive>/HengeMachines`.
     nonisolated static func resolveMachineDirectory(in base: URL, for id: UUID, relativePath: String? = nil) -> URL {
         if let rel = relativePath {
             if rel.isEmpty || rel == "." {
                 return base
+            }
+            guard MachineStorageSafety.validRelativePath(rel) else {
+                return base.appendingPathComponent(".henge-invalid-\(id.uuidString)", isDirectory: true)
             }
             return base.appendingPathComponent(rel, isDirectory: true)
         }
@@ -231,7 +249,9 @@ final class ExternalDriveRegistry: @unchecked Sendable {
         }
         let fm = FileManager.default
         if fm.fileExists(atPath: base.appendingPathComponent("disk.img").path),
-           fm.fileExists(atPath: base.appendingPathComponent("machine.json").path) {
+           let data = try? Data(contentsOf: base.appendingPathComponent("machine.json")),
+           let manifest = try? JSONDecoder().decode(PortableMachineManifest.self, from: data),
+           manifest.id == id {
             return base
         }
         let standard = base
@@ -251,8 +271,10 @@ final class ExternalDriveRegistry: @unchecked Sendable {
         lock.lock()
         let base = folders[id]
         let rel = relativePaths[id]
+        let target = driveTargets[id]
         lock.unlock()
-        guard let base else { return nil }
+        guard let base, target?.isAvailable == true else { return nil }
+        if let rel, !MachineStorageSafety.validRelativePath(rel) { return nil }
         return Self.resolveMachineDirectory(in: base, for: id, relativePath: rel)
     }
 
@@ -260,10 +282,11 @@ final class ExternalDriveRegistry: @unchecked Sendable {
     func resolveAndRegister(id: UUID, bookmark: Data, relativePath: String? = nil) -> (folder: URL, refreshedBookmark: Data?)? {
         lock.lock()
         let existing = folders[id]
+        let existingTarget = driveTargets[id]
         lock.unlock()
 
         let fm = FileManager.default
-        if let existing {
+        if let existing, existingTarget?.isAvailable == true {
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: existing.path, isDirectory: &isDir),
                isDir.boolValue,
@@ -309,7 +332,8 @@ final class ExternalDriveRegistry: @unchecked Sendable {
 }
 
 struct ExternalDriveHengeSummary: Equatable {
-    var driveName: String
+    let target: ExternalDriveTarget
+    var driveName: String { target.displayName }
     var machineCount: Int
     var hasInstallFiles: Bool
     var totalBytes: Int64
@@ -340,6 +364,7 @@ final class ExternalInstallStorage: ObservableObject {
     @Published private(set) var isClearing = false
     @Published var lastError: String?
     @Published var statusMessage: String?
+    private var activeTarget: ExternalDriveTarget?
 
     private init() {
         if let raw = UserDefaults.standard.string(forKey: Self.modeKey),
@@ -360,9 +385,32 @@ final class ExternalInstallStorage: ObservableObject {
     }
 
     var effectiveDriveURL: URL? {
+        currentDriveTarget()?.rootURL
+    }
+
+    func currentDriveTarget() -> ExternalDriveTarget? {
+        let candidate: URL?
         if isConnected, let folderURL {
-            return folderURL
+            candidate = folderURL
+        } else if isConfigured {
+            activeTarget = nil
+            return nil
+        } else {
+            candidate = availableExternalMacRoot()
         }
+        guard let candidate else {
+            activeTarget = nil
+            return nil
+        }
+        let canonical = ExternalDriveRegistry.canonicalPath(candidate)
+        if let activeTarget, activeTarget.canonicalPath == canonical {
+            return activeTarget.isAvailable ? activeTarget : nil
+        }
+        activeTarget = ExternalDriveTarget.capture(rootURL: candidate, displayName: Self.volumeName(at: candidate))
+        return activeTarget
+    }
+
+    private func availableExternalMacRoot() -> URL? {
         let fm = FileManager.default
         for mac in Machines.shared.all where mac.isExternal && mac.isAvailable {
             if let root = ExternalDriveRegistry.shared.rootFolder(for: mac.id) {
@@ -378,6 +426,7 @@ final class ExternalInstallStorage: ObservableObject {
     }
 
     var effectiveDriveName: String {
+        if let target = currentDriveTarget() { return target.displayName }
         if let configuredName, !configuredName.isEmpty {
             return configuredName
         }
@@ -399,6 +448,7 @@ final class ExternalInstallStorage: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
         folderURL = nil
+        activeTarget = nil
         configuredName = nil
         isConnected = false
         filesystemType = nil
@@ -521,6 +571,10 @@ final class ExternalInstallStorage: ObservableObject {
 
     @discardableResult
     func selectFolder(_ pickedURL: URL) -> Bool {
+        guard !isClearing && !Installer.shared.busy && !Machines.shared.isBusy && !Machines.isVMRunning else {
+            lastError = "請先等待目前作業完成，再變更外接 SSD 資料夾。"
+            return false
+        }
         lastError = nil
         statusMessage = nil
         _ = ExternalDriveRegistry.shared.retainScope(for: pickedURL)
@@ -544,6 +598,7 @@ final class ExternalInstallStorage: ObservableObject {
             UserDefaults.standard.set(data, forKey: Self.bookmarkKey)
             UserDefaults.standard.set(name, forKey: Self.nameKey)
             folderURL = pickedURL
+            activeTarget = nil
             configuredName = name
             isConnected = true
             filesystemType = fsInfo.name
@@ -628,12 +683,12 @@ final class ExternalInstallStorage: ObservableObject {
 
     func inspectHengeDataOnDrive() -> ExternalDriveHengeSummary? {
         refreshConnection()
-        guard let root = effectiveDriveURL else {
+        guard let target = currentDriveTarget() else {
             lastError = "外接 SSD 尚未連接或無法讀取，請確認硬碟已插上後重試。"
             return nil
         }
+        let root = target.rootURL
         let fm = FileManager.default
-        let driveName = effectiveDriveName
         let rootIsPortableMac = Machines.isValidPortableFolder(root)
         let machinesRoot: URL? = {
             if rootIsPortableMac { return nil }
@@ -651,8 +706,7 @@ final class ExternalInstallStorage: ObservableObject {
 
         for mac in Machines.shared.all where mac.isExternal && mac.isAvailable {
             let dir = mac.directory
-            if let rootFolder = ExternalDriveRegistry.shared.rootFolder(for: mac.id),
-               ExternalDriveRegistry.isSameVolumeOrPath(rootFolder, root) {
+            if MachineStorageSafety.isOwnedMachineDirectory(dir, within: root) {
                 let canon = ExternalDriveRegistry.canonicalPath(dir)
                 if seenPaths.insert(canon).inserted {
                     machineCount += 1
@@ -663,7 +717,7 @@ final class ExternalInstallStorage: ObservableObject {
 
         let canonRoot = ExternalDriveRegistry.canonicalPath(root)
         if !seenPaths.contains(canonRoot) &&
-            (rootIsPortableMac || fm.fileExists(atPath: root.appendingPathComponent(Machines.installingMarker).path)) {
+            MachineStorageSafety.isOwnedMachineDirectory(root, within: root) {
             let bytes = Machines.knownMachineBytes(in: root)
             if bytes > 0 || rootIsPortableMac {
                 seenPaths.insert(canonRoot)
@@ -673,13 +727,14 @@ final class ExternalInstallStorage: ObservableObject {
         }
 
         if let machinesRoot,
+           MachineStorageSafety.isSafeDirectory(machinesRoot, within: root),
            let children = try? fm.contentsOfDirectory(at: machinesRoot, includingPropertiesForKeys: nil) {
             for child in children {
                 let canon = ExternalDriveRegistry.canonicalPath(child)
                 guard !seenPaths.contains(canon) else { continue }
-                let hasUnfinished = fm.fileExists(atPath: child.appendingPathComponent(Machines.installingMarker).path)
+                guard MachineStorageSafety.isOwnedMachineDirectory(child, within: root) else { continue }
                 let bytes = Machines.knownMachineBytes(in: child)
-                if bytes > 0 || Machines.isValidPortableFolder(child) || hasUnfinished {
+                if bytes > 0 || Machines.isValidPortableFolder(child) {
                     seenPaths.insert(canon)
                     machineCount += 1
                     totalBytes += bytes
@@ -688,13 +743,13 @@ final class ExternalInstallStorage: ObservableObject {
         }
 
         var hasInstallFiles = false
-        if let stagingDir, fm.fileExists(atPath: stagingDir.path) {
+        if let stagingDir, MachineStorageSafety.isSafeDirectory(stagingDir, within: root) {
             hasInstallFiles = true
             totalBytes += Self.directoryBytes(stagingDir)
         }
 
         return ExternalDriveHengeSummary(
-            driveName: driveName,
+            target: target,
             machineCount: machineCount,
             hasInstallFiles: hasInstallFiles,
             totalBytes: totalBytes
@@ -707,19 +762,17 @@ final class ExternalInstallStorage: ObservableObject {
             lastError = "請先將執行中的 macOS 關機並等待目前作業完成，再執行安全退出。"
             return false
         }
-        let driveName = effectiveDriveName
-        let currentURL = folderURL
-        let targetURL = currentURL ?? effectiveDriveURL
-        _ = Machines.shared.ejectAllExternalMacs(on: targetURL, markAsExplicitlyEjected: false, keepURL: nil)
-        if let targetURL {
-            ExternalDriveRegistry.shared.forceReleaseAllScopes(matching: targetURL)
-        }
-        if currentURL == nil {
-            ExternalDriveRegistry.shared.forceReleaseAllScopes()
+        refreshConnection()
+        let target = currentDriveTarget()
+        let driveName = target?.displayName ?? configuredName ?? "外接 SSD"
+        if let target {
+            _ = Machines.shared.ejectAllExternalMacs(on: target.rootURL, markAsExplicitlyEjected: false, keepURL: nil)
+            ExternalDriveRegistry.shared.forceReleaseAllScopes(matching: target.rootURL)
         }
         UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
         folderURL = nil
+        activeTarget = nil
         configuredName = nil
         isConnected = false
         filesystemType = nil
@@ -731,7 +784,10 @@ final class ExternalInstallStorage: ObservableObject {
         return true
     }
 
-    func clearAllHengeDataOnDrive(onComplete: @escaping (Bool) -> Void = { _ in }) {
+    func clearAllHengeDataOnDrive(
+        confirmed summary: ExternalDriveHengeSummary,
+        onComplete: @escaping (Bool) -> Void = { _ in }
+    ) {
         guard !isClearing else { onComplete(false); return }
         guard !Machines.isVMRunning && !Machines.shared.isBusy else {
             lastError = "請先將執行中的 macOS 關機並等待目前作業完成，再清除外接 SSD 上的 Henge 資料。"
@@ -739,14 +795,15 @@ final class ExternalInstallStorage: ObservableObject {
             return
         }
         refreshConnection()
-        guard let root = effectiveDriveURL else {
-            lastError = "外接 SSD 尚未連接或無法寫入，請重新插上後再試。"
+        guard let current = currentDriveTarget(), current == summary.target, current.isAvailable else {
+            lastError = "外接 SSD 已變更或中斷連線。為保護資料，請重新確認清除目標。"
             onComplete(false)
             return
         }
+        let target = summary.target
+        let root = target.rootURL
 
-        let fm = FileManager.default
-        let driveName = effectiveDriveName
+        let driveName = target.displayName
         let rootIsPortableMac = Machines.isValidPortableFolder(root)
         let machinesRoot: URL? = {
             if rootIsPortableMac { return nil }
@@ -759,24 +816,23 @@ final class ExternalInstallStorage: ObservableObject {
         }()
 
         var seen = Set<String>()
-        var targets: [(dir: URL, allowRemoveDir: Bool)] = []
+        var targets: [(dir: URL, allowRemoveDir: Bool, approvedRoot: URL)] = []
         let canonRoot = ExternalDriveRegistry.canonicalPath(root)
         for mac in Machines.shared.all where mac.isExternal && mac.isAvailable {
-            if let rootFolder = ExternalDriveRegistry.shared.rootFolder(for: mac.id),
-               ExternalDriveRegistry.isSameVolumeOrPath(rootFolder, root) {
+            if MachineStorageSafety.isOwnedMachineDirectory(mac.directory, within: root) {
                 let dir = mac.directory
                 let canon = ExternalDriveRegistry.canonicalPath(dir)
                 if seen.insert(canon).inserted {
                     let allowRemove = mac.externalRelativePath != "." && canon != canonRoot
-                    targets.append((dir: dir, allowRemoveDir: allowRemove))
+                    targets.append((dir: dir, allowRemoveDir: allowRemove, approvedRoot: root))
                 }
             }
         }
 
         if !seen.contains(canonRoot) &&
-            (rootIsPortableMac || fm.fileExists(atPath: root.appendingPathComponent(Machines.installingMarker).path)) {
+            MachineStorageSafety.isOwnedMachineDirectory(root, within: root) {
             seen.insert(canonRoot)
-            targets.append((dir: root, allowRemoveDir: false))
+            targets.append((dir: root, allowRemoveDir: false, approvedRoot: root))
         }
 
         isClearing = true
@@ -788,48 +844,47 @@ final class ExternalInstallStorage: ObservableObject {
             var freedBytes: Int64 = 0
             var errs: [String] = []
             var handledPaths = Set<String>()
+            var clearedPaths = Set<String>()
 
-            for target in targets {
-                let canon = ExternalDriveRegistry.canonicalPath(target.dir)
+            for machine in targets {
+                let canon = ExternalDriveRegistry.canonicalPath(machine.dir)
                 handledPaths.insert(canon)
                 do {
-                    freedBytes += try Machines.safelyDeleteMachineFiles(in: target.dir, allowRemovingDirectory: target.allowRemoveDir)
+                    freedBytes += try Machines.safelyDeleteMachineFiles(
+                        in: machine.dir, allowRemovingDirectory: machine.allowRemoveDir,
+                        approvedRoot: machine.approvedRoot, validating: target
+                    )
+                    clearedPaths.insert(canon)
                 } catch {
-                    errs.append("\(target.dir.lastPathComponent)：\(error.localizedDescription)")
+                    errs.append("\(machine.dir.lastPathComponent)：\(error.localizedDescription)")
                 }
             }
 
             if let machinesRoot,
+               MachineStorageSafety.isSafeDirectory(machinesRoot, within: root),
                let children = try? fm.contentsOfDirectory(at: machinesRoot, includingPropertiesForKeys: nil) {
                 for child in children {
                     let canon = ExternalDriveRegistry.canonicalPath(child)
                     guard !handledPaths.contains(canon) else { continue }
-                    let hasKnownHengeData = Machines.knownMachineEntries.contains {
-                        fm.fileExists(atPath: child.appendingPathComponent($0).path)
-                    }
-                    guard hasKnownHengeData else { continue }
+                    guard MachineStorageSafety.isOwnedMachineDirectory(child, within: root) else { continue }
                     handledPaths.insert(canon)
                     do {
-                        freedBytes += try Machines.safelyDeleteMachineFiles(in: child, allowRemovingDirectory: true)
+                        freedBytes += try Machines.safelyDeleteMachineFiles(
+                            in: child, allowRemovingDirectory: true, approvedRoot: root, validating: target
+                        )
+                        clearedPaths.insert(canon)
                     } catch {
                         errs.append("\(child.lastPathComponent)：\(error.localizedDescription)")
                     }
                 }
-                let isVol = (try? machinesRoot.resourceValues(forKeys: [.isVolumeKey]))?.isVolume ?? false
-                if !isVol,
-                   let rem = try? fm.contentsOfDirectory(atPath: machinesRoot.path),
-                   rem.filter({ $0 != ".DS_Store" }).isEmpty {
-                    try? fm.removeItem(at: machinesRoot)
-                }
             }
 
             var removedStaging = false
-            if let stagingDir, fm.fileExists(atPath: stagingDir.path) {
-                let bytes = Self.directoryBytes(stagingDir)
+            if let stagingDir, MachineStorageSafety.isSafeDirectory(stagingDir, within: root) {
                 do {
-                    try fm.removeItem(at: stagingDir)
+                    let bytes = try MachineStorageSafety.clearInstallStaging(stagingDir, approvedRoot: root, validating: target)
                     freedBytes += bytes
-                    removedStaging = true
+                    removedStaging = bytes > 0 || !fm.fileExists(atPath: stagingDir.path)
                 } catch {
                     errs.append("HengeInstall：\(error.localizedDescription)")
                 }
@@ -838,12 +893,15 @@ final class ExternalInstallStorage: ObservableObject {
             let finalFreed = freedBytes
             let finalErrors = errs
             let finalRemovedStaging = removedStaging
+            let finalClearedPaths = clearedPaths
             let nothingHandled = handledPaths.isEmpty && !finalRemovedStaging
 
             await MainActor.run {
                 self.isClearing = false
-                _ = Machines.shared.ejectAllExternalMacs(on: root, markAsExplicitlyEjected: false, keepURL: self.folderURL)
-                Machines.shared.clearAllEjectedFlags()
+                _ = Machines.shared.ejectAllExternalMacs(
+                    on: root, markAsExplicitlyEjected: false, keepURL: self.folderURL,
+                    onlyDirectories: finalClearedPaths
+                )
                 self.refreshConnection()
                 if !finalErrors.isEmpty {
                     self.lastError = "清除過程發生部分錯誤：\(finalErrors.joined(separator: "；"))"
@@ -869,8 +927,7 @@ final class ExternalInstallStorage: ObservableObject {
             root.appendingPathComponent("\(r.id).ipsw")
         ]
         for candidate in candidates {
-            let size = (try? candidate.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            if Int64(size) > r.bytes / 2 {
+            if RestoreImageValidation.shared.validatedSize(of: candidate, expectedBuild: r.id) != nil {
                 return candidate
             }
         }
@@ -878,26 +935,29 @@ final class ExternalInstallStorage: ObservableObject {
     }
 
     func cleanupStaleRestoreDirs(force: Bool = false) {
-        guard force || !Installer.shared.busy, let root = stagingRoot else { return }
+        guard !Installer.shared.busy, let root = stagingRoot,
+              let approvedRoot = folderURL, let target = currentDriveTarget() else { return }
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
-        for item in items where item.lastPathComponent.hasPrefix("restore-") {
-            try? fm.removeItem(at: item)
+        for item in items where item.lastPathComponent.hasPrefix("restore-")
+            && UUID(uuidString: String(item.lastPathComponent.dropFirst(8))) != nil {
+            _ = try? MachineStorageSafety.removeManagedDirectory(item, approvedRoot: approvedRoot, validating: target)
         }
     }
 
     func cleanupEmptyStagingIfUnused(force: Bool = false) {
-        guard force || !Installer.shared.busy, let root = stagingRoot else { return }
+        guard !Installer.shared.busy, let root = stagingRoot,
+              let approvedRoot = folderURL, let target = currentDriveTarget() else { return }
         cleanupStaleRestoreDirs(force: force)
         let fm = FileManager.default
         if let imagesDir = externalRestoreImagesDir,
            let items = try? fm.contentsOfDirectory(atPath: imagesDir.path),
            items.isEmpty {
-            try? fm.removeItem(at: imagesDir)
+            MachineStorageSafety.removeEmptyDirectory(imagesDir, within: approvedRoot, validating: target)
         }
         if let items = try? fm.contentsOfDirectory(atPath: root.path),
            items.isEmpty {
-            try? fm.removeItem(at: root)
+            MachineStorageSafety.removeEmptyDirectory(root, within: approvedRoot, validating: target)
         }
     }
 }

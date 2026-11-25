@@ -5,6 +5,7 @@ import GameController
 /// and is its own trackpad. Zoomed in, the screen fills the device either way and follows the pointer.
 /// A keyboard, trackpad or mouse attached to an iPad works throughout.
 struct SessionView: View {
+    @Environment(\.locale) private var interfaceLocale
     let mac: VirtualMac
     let close: () -> Void
 
@@ -21,6 +22,7 @@ struct SessionView: View {
     @State private var started = Date()
     @State private var thermalState = ProcessInfo.processInfo.thermalState
     @State private var bootRAM: UInt64 = 0 /* what the Mac was started with, which a save is for */
+    @State private var requestedRAMMB = 0
     @State private var bootCPUs: Int = 4
     @State private var ramMode: Int32 = 0
     @State private var runningMac: VirtualMac?
@@ -53,6 +55,7 @@ struct SessionView: View {
 
 
     var body: some View {
+        let _ = interfaceLocale
         GeometryReader { geo in
             let insets = geo.safeAreaInsets
             let full = CGSize(width: geo.size.width + insets.leading + insets.trailing,
@@ -68,8 +71,8 @@ struct SessionView: View {
                         if display.isExternal && state != 2 {
                             VStack(spacing: 8) {
                                 Image(systemName: "display").font(.largeTitle)
-                                Text("Mac 畫面已輸出至外接螢幕").font(.headline)
-                                Text("請使用觸控螢幕、鍵盤或外接滑鼠操作。")
+                                Text(L10n.text("Mac 畫面已輸出至外接螢幕")).font(.headline)
+                                Text(L10n.text("請使用觸控螢幕、鍵盤或外接滑鼠操作。"))
                                     .font(.subheadline)
                             }
                             .foregroundStyle(.white)
@@ -103,7 +106,7 @@ struct SessionView: View {
                         floatingControls(layout)
                     }
                     if pointerRefused && !showRevealHint {
-                        Label("請將 Henge 設為全螢幕，才能將觸控板或滑鼠交給虛擬 Mac 使用", systemImage: "cursorarrow.rays")
+                        Label(L10n.text("請將 Henge 設為全螢幕，才能將觸控板或滑鼠交給虛擬 Mac 使用"), systemImage: "cursorarrow.rays")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -113,7 +116,7 @@ struct SessionView: View {
                             .allowsHitTesting(false)
                     }
                     if showRevealHint {
-                        Label("四指同時輕點螢幕即可顯示控制列", systemImage: "hand.tap")
+                        Label(L10n.text("四指同時輕點螢幕即可顯示控制列"), systemImage: "hand.tap")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -123,7 +126,7 @@ struct SessionView: View {
                             .allowsHitTesting(false)
                     }
                     if showWallpaperTip && !showRevealHint && !pointerRefused {
-                        Label("提示：在 Mac「系統設定」改用靜態純色桌布並將螢幕保護程式設為「永不」，可大幅提升流暢度。", systemImage: "speedometer")
+                        Label(L10n.text("提示：在 Mac「系統設定」改用靜態純色桌布並將螢幕保護程式設為「永不」，可大幅提升流暢度。"), systemImage: "speedometer")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
                             .multilineTextAlignment(.leading)
@@ -167,10 +170,10 @@ struct SessionView: View {
         .statusBarHidden(zoomed || Device.isPad)
         .persistentSystemOverlays(.hidden)
         .sheet(isPresented: $showDetails) { details }
-        .confirmationDialog("確定要強制關閉「\(mac.name)」嗎？", isPresented: $confirmStop, titleVisibility: .visible) {
-            Button("強制關機", role: .destructive) { finish() }
+        .confirmationDialog(L10n.format("確定要強制關閉「%@」嗎？", String(describing: mac.name)), isPresented: $confirmStop, titleVisibility: .visible) {
+            Button(L10n.text("強制關機"), role: .destructive) { finish() }
         } message: {
-            Text("這會立即切斷虛擬 Mac 電源，任何尚未儲存的檔案或進度將會遺失。")
+            Text(L10n.text("這會立即切斷虛擬 Mac 電源，任何尚未儲存的檔案或進度將會遺失。"))
         }
         .onChange(of: zoomed) { on in
             zoomFollowing?.cancel()
@@ -291,17 +294,17 @@ struct SessionView: View {
     @ViewBuilder private func uprightControls(_ layout: Layout) -> some View {
         if !typing && !controlsHidden {
             HStack {
-                tool("eye.slash", "隱藏控制列") { hideControls() }
+                tool("eye.slash", L10n.text("隱藏控制列")) { hideControls() }
                 Spacer()
-                tool("keyboard", "鍵盤") { typing = true }
+                tool("keyboard", L10n.text("鍵盤")) { typing = true }
                 Spacer()
                 pasteTool
                 Spacer()
-                tool("plus.magnifyingglass", "放大檢視") { zoomed = true }
+                tool("plus.magnifyingglass", L10n.text("放大檢視")) { zoomed = true }
                 Spacer()
-                tool("info.circle", "詳細資訊") { showDetails = true }
+                tool("info.circle", L10n.text("詳細資訊")) { showDetails = true }
                 Spacer()
-                tool("power", "關機", tint: Desk.bad) { stopTapped() }
+                tool("power", L10n.text("關機"), tint: Desk.bad) { stopTapped() }
             }
             .padding(.horizontal, 22)
             .frame(width: layout.pad.width, height: 54)
@@ -319,22 +322,22 @@ struct SessionView: View {
             ZStack {
                 Trackpad()
                 if compact {
-                    Text("觸控板").font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
+                    Text(L10n.text("觸控板")).font(.system(size: 14)).foregroundStyle(Desk.faint).allowsHitTesting(false)
                 } else {
                     VStack(spacing: 6) {
-                        hint("滑動", "移動游標")
-                        hint("輕點", "左鍵點擊")
-                        hint("按住再滑動", "拖曳視窗或選取")
-                        hint("雙指滑動", "捲動頁面")
+                        hint(L10n.text("滑動"), L10n.text("移動游標"))
+                        hint(L10n.text("輕點"), L10n.text("左鍵點擊"))
+                        hint(L10n.text("按住再滑動"), L10n.text("拖曳視窗或選取"))
+                        hint(L10n.text("雙指滑動"), L10n.text("捲動頁面"))
                     }
                     .allowsHitTesting(false)
                 }
             }
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
             HStack(spacing: 0) {
-                MouseButton(title: "左鍵點擊", button: 0)
+                MouseButton(title: L10n.text("左鍵點擊"), button: 0)
                 Rectangle().fill(Desk.hairline).frame(width: 0.5)
-                MouseButton(title: "右鍵點擊", button: 1)
+                MouseButton(title: L10n.text("右鍵點擊"), button: 1)
             }
             .frame(height: compact ? 50 : 70)
         }
@@ -346,7 +349,7 @@ struct SessionView: View {
     }
 
     private func hint(_ strong: String, _ rest: String) -> some View {
-        (Text(strong).foregroundColor(Desk.dim).fontWeight(.semibold) + Text(" \(rest)").foregroundColor(Desk.faint))
+        (Text(L10n.text(strong)).foregroundColor(Desk.dim).fontWeight(.semibold) + Text(" \(rest)").foregroundColor(Desk.faint))
             .font(.system(size: 15))
     }
 
@@ -378,7 +381,7 @@ struct SessionView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel(label)
+        .accessibilityLabel(L10n.text(label))
     }
 
     // MARK: Filling the phone
@@ -387,13 +390,13 @@ struct SessionView: View {
         let landscape = layout.touch.width > layout.touch.height
         let top = layout.insets.top + (landscape ? 8 : 6)
         let pill = HStack(spacing: 4) {
-            tool("eye.slash", "隱藏控制列", tint: .white) { hideControls() }
-            tool("keyboard", "鍵盤", tint: .white) { typing.toggle() }
+            tool("eye.slash", L10n.text("隱藏控制列"), tint: .white) { hideControls() }
+            tool("keyboard", L10n.text("鍵盤"), tint: .white) { typing.toggle() }
             pasteTool
-            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? "恢復檢視" : "放大檢視", tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
-            tool("info.circle", "詳細資訊", tint: .white) { showDetails = true }
+            tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? L10n.text("恢復檢視") : L10n.text("放大檢視"), tint: zoomed ? Desk.accentLight : .white) { zoomed.toggle() }
+            tool("info.circle", L10n.text("詳細資訊"), tint: .white) { showDetails = true }
             Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
-            tool("power", "關機", tint: Desk.bad) { stopTapped() }
+            tool("power", L10n.text("關機"), tint: Desk.bad) { stopTapped() }
         }
         .padding(.horizontal, 8)
         .frame(height: 50)
@@ -463,9 +466,9 @@ struct SessionView: View {
 
     private func errorCard(_ text: String, _ layout: Layout) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("這台 Mac 無法啟動").font(.system(size: 17, weight: .semibold))
-            Text(text).font(.system(size: 14)).foregroundStyle(Desk.dim)
-            Button("關閉") { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
+            Text(L10n.text("這台 Mac 無法啟動")).font(.system(size: 17, weight: .semibold))
+            Text(L10n.text(text)).font(.system(size: 14)).foregroundStyle(Desk.dim)
+            Button(L10n.text("關閉")) { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
         }
         .padding(18)
         .frame(width: min(layout.touch.width, 390) - 32, alignment: .leading)
@@ -475,19 +478,19 @@ struct SessionView: View {
 
     private var phase: String {
         switch state {
-        case 0: return error == nil ? "正在啟動…" : "尚未啟動"
-        case 1: return userCode ? "macOS 執行中" : "正在開機"
-        case 3: return "正在完成關機…"
-        default: return "已停止（\(String(cString: henge_vm_exit_reason()))）"
+        case 0: return error == nil ? L10n.text("正在啟動…") : L10n.text("尚未啟動")
+        case 1: return userCode ? L10n.text("macOS 執行中") : L10n.text("正在開機")
+        case 3: return L10n.text("正在完成關機…")
+        default: return L10n.format("已停止（%@）", String(describing: String(cString: henge_vm_exit_reason())))
         }
     }
 
     private var ramModeLabel: String {
         switch ramMode {
-        case 1: return "免計入上限 No Footprint"
-        case 2: return "檔案映射"
-        case 3: return "匿名記憶體"
-        default: return "配置中"
+        case 1: return L10n.text("免計入上限 No Footprint")
+        case 2: return L10n.text("檔案映射")
+        case 3: return L10n.text("匿名記憶體")
+        default: return L10n.text("配置中")
         }
     }
 
@@ -498,38 +501,42 @@ struct SessionView: View {
                     let ramText = bootRAM % 1024 == 0
                         ? "\(bootRAM / 1024) GB"
                         : String(format: "%.1f GB", Double(bootRAM) / 1024.0)
-                    LabeledContent("儲存位置", value: mac.isExternal ? "外接 SSD（\(mac.externalDriveName ?? "外接硬碟")）" : "此 \(Device.name)")
-                    LabeledContent("記憶體配置", value: bootRAM > 0 ? "\(ramText)（\(ramModeLabel)）" : ramModeLabel)
-                    LabeledContent("運行中 CPU", value: "\(cpusOn)／\(bootCPUs)")
-                    LabeledContent("裝置溫度", value: Self.thermalLabel(thermalState))
-                    LabeledContent("指令轉譯率", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
-                    LabeledContent("網路封包", value: "送出 \(framesOut)，接收 \(framesIn)")
-                    LabeledContent("已運行時間", value: "\(Int(Date().timeIntervalSince(started))) 秒")
+                    LabeledContent(L10n.text("儲存位置"), value: mac.isExternal ? L10n.format("外接 SSD（%@）", String(describing: mac.externalDriveName ?? L10n.text("外接硬碟"))) : L10n.format("此 %@", String(describing: Device.name)))
+                    LabeledContent(L10n.text("記憶體配置"), value: bootRAM > 0 ? "\(ramText)（\(ramModeLabel)）" : ramModeLabel)
+                    LabeledContent(L10n.text("要求的記憶體"), value: GuestRAMBudget.text(requestedRAMMB))
+                    LabeledContent(L10n.text("運行中 CPU"), value: "\(cpusOn)／\(bootCPUs)")
+                    LabeledContent(L10n.text("裝置溫度"), value: L10n.text(Self.thermalLabel(thermalState)))
+                    LabeledContent(L10n.text("指令轉譯率"), value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
+                    LabeledContent(L10n.text("網路封包"), value: L10n.format("送出 %@，接收 %@", String(describing: framesOut), String(describing: framesIn)))
+                    LabeledContent(L10n.text("已運行時間"), value: L10n.format("%@ 秒", String(describing: Int(Date().timeIntervalSince(started)))))
                 }
-                Section("顯示器") {
-                    Toggle("螢幕色彩同步", isOn: $matchScreenColors)
-                    LabeledContent("畫面亮度", value: "\(Int(screenBrightness * 100))%")
+                Section(L10n.text("記憶體狀態")) {
+                    MemoryStatusView(ramMB: requestedRAMMB)
+                }
+                Section(L10n.text("顯示器")) {
+                    Toggle(L10n.text("螢幕色彩同步"), isOn: $matchScreenColors)
+                    LabeledContent(L10n.text("畫面亮度"), value: "\(Int(screenBrightness * 100))%")
                     Slider(value: $screenBrightness, in: 0.4...1)
-                    Text("只調整虛擬 Mac 畫面的顯示亮度。")
+                    Text(L10n.text("只調整虛擬 Mac 畫面的顯示亮度。"))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("指標") {
-                    Picker("指標大小", selection: $cursorScale) {
+                Section(L10n.text("指標")) {
+                    Picker(L10n.text("指標大小"), selection: $cursorScale) {
                         Text("1×").tag(1)
                         Text("2×").tag(2)
                         Text("3×").tag(3)
                     }
                     .pickerStyle(.segmented)
-                    Toggle("銳利邊緣", isOn: $sharpCursor)
-                    LabeledContent("捲動速度", value: String(format: "%.1f×", scrollSpeed))
+                    Toggle(L10n.text("銳利邊緣"), isOn: $sharpCursor)
+                    LabeledContent(L10n.text("捲動速度"), value: String(format: "%.1f×", scrollSpeed))
                     Slider(value: $scrollSpeed, in: 0.1...1.5)
-                    Text("macOS 提供的指標影像較小，在 iPad 上設為 1× 最銳利；捲動速度會立即生效。")
+                    Text(L10n.text("macOS 提供的指標影像較小，在 iPad 上設為 1× 最銳利；捲動速度會立即生效。"))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("剪貼簿與資料夾共享") {
-                    LabeledContent("狀態", value: helperRunning ? "已啟用" : "尚未設定")
+                Section(L10n.text("剪貼簿與資料夾共享")) {
+                    LabeledContent(L10n.text("狀態"), value: helperRunning ? L10n.text("已啟用") : L10n.text("尚未設定"))
                     if !helperRunning {
-                        Button("自動輸入設定指令") {
+                        Button(L10n.text("自動輸入設定指令")) {
                             showDetails = false
                             Task {
                                 try? await Task.sleep(nanoseconds: 600_000_000)
@@ -538,29 +545,29 @@ struct SessionView: View {
                         }
                     }
                     Text(helperRunning
-                         ? "將檔案放到「檔案 › Henge › Shared」即可在 Mac 家目錄的「Henge」資料夾存取。在 Mac 複製純文字會自動同步至此，iPad 複製後請點上方第三顆貼上鈕傳給 Mac。"
-                         : "每台 Mac 只需設定一次：先開啟 Mac 裡的終端機，點按上方按鈕後按 Return 執行；若彈出區域網路權限詢問請選允許（輸入時 Mac 輸入法需為英文）。")
+                         ? L10n.text("將檔案放到「檔案 › Henge › Shared」即可在 Mac 家目錄的「Henge」資料夾存取。在 Mac 複製純文字會自動同步至此，iPad 複製後請點上方第三顆貼上鈕傳給 Mac。")
+                         : L10n.text("每台 Mac 只需設定一次：先開啟 Mac 裡的終端機，點按上方按鈕後按 Return 執行；若彈出區域網路權限詢問請選允許（輸入時 Mac 輸入法需為英文）。"))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("輕量化 macOS") {
-                    Button("輸入輕量化設定指令") {
+                Section(L10n.text("輕量化 macOS")) {
+                    Button(L10n.text("輸入輕量化設定指令")) {
                         showDetails = false
                         Task {
                             try? await Task.sleep(nanoseconds: 600_000_000)
                             await Keys.typeSlowly(Sharing.lightenCommand)
                         }
                     }
-                    Button("輸入還原指令") {
+                    Button(L10n.text("輸入還原指令")) {
                         showDetails = false
                         Task {
                             try? await Task.sleep(nanoseconds: 600_000_000)
                             await Keys.typeSlowly(Sharing.unlightenCommand)
                         }
                     }
-                    Text("減少模擬 CPU 的繪圖負荷：關閉視窗動畫、Dock 動畫、桌面小工具與動態桌布。請先開啟 Mac 終端機，點按按鈕後按 Return 執行，並登出再登入即可生效（建議另於系統設定開啟「減少動態效果」與「減少透明度」）。")
+                    Text(L10n.text("減少模擬 CPU 的繪圖負荷：關閉視窗動畫、Dock 動畫、桌面小工具與動態桌布。請先開啟 Mac 終端機，點按按鈕後按 Return 執行，並登出再登入即可生效（建議另於系統設定開啟「減少動態效果」與「減少透明度」）。"))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("日誌") {
+                Section(L10n.text("日誌")) {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(Array(log.suffix(30).enumerated()), id: \.offset) { _, line in
                             Text(line).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
@@ -568,7 +575,7 @@ struct SessionView: View {
                     }
                 }
             }
-            .navigationTitle("詳細資訊")
+            .navigationTitle(L10n.text("詳細資訊"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -607,8 +614,9 @@ struct SessionView: View {
         guard !Task.isCancelled else { return }
         let liveMac = Machines.shared.all.first(where: { $0.id == mac.id }) ?? mac
         runningMac = liveMac
+        requestedRAMMB = liveMac.effectiveRAMMB
         if liveMac.isExternal && !Machines.shared.ensureExternalAccess(for: liveMac) {
-            error = "外接 SSD（\(liveMac.externalDriveName ?? "外接硬碟")）未連接，請插上後再試。"
+            error = L10n.format("外接 SSD（%@）未連接，請插上後再試。", String(describing: liveMac.externalDriveName ?? L10n.text("外接硬碟")))
             return
         }
         UIApplication.shared.isIdleTimerDisabled = true
@@ -616,7 +624,7 @@ struct SessionView: View {
         let ram = GuestMemory.prepare(liveMac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
-            error = "此 \(Device.name) 本機可用空間不足，無法配置虛擬 Mac 記憶體（請至少保留數 GB 空間）。"
+            error = GuestMemory.lastFailure ?? L10n.format("無法建立要求的 %@ 記憶體映射，請檢查本機儲存空間後重試。", String(describing: GuestRAMBudget.text(requestedRAMMB)))
             return
         }
         var buffer = [CChar](repeating: 0, count: 256)

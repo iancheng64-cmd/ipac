@@ -633,7 +633,7 @@ struct MacMenuButton: UIViewRepresentable {
     static func elements() -> [UIMenuElement] {
         guard let raw = henge_tl_app_main_menu(),
               let items = Unmanaged<NSArray>.fromOpaque(raw).takeRetainedValue() as? [[String: Any]], !items.isEmpty else {
-            return [UIAction(title: "此程式沒有選單列項目", attributes: .disabled) { _ in }]
+            return [UIAction(title: L10n.text("此程式沒有選單列項目"), attributes: .disabled) { _ in }]
         }
         return build(items)
     }
@@ -676,7 +676,9 @@ final class MacScreenHub {
 struct MacAppScreen: View {
     let app: MacApp
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var interfaceLocale
     @State private var status = "載入中…"
+    @State private var loadFailure: String?
     @State private var started = false
     @State private var trackpad = UserDefaults.standard.object(forKey: MacScreenUIView.trackpadKey) as? Bool ?? true
     private let screen = MacAppScreen.screenSize()
@@ -691,6 +693,7 @@ struct MacAppScreen: View {
     }
 
     var body: some View {
+        let _ = interfaceLocale
         ZStack(alignment: .topLeading) {
             MacScreenView(screen: screen).ignoresSafeArea()
             HStack(spacing: 10) {
@@ -710,8 +713,9 @@ struct MacAppScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(14)
-            if !started || !status.isEmpty {
-                Text(status).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+            if !started || !status.isEmpty || loadFailure != nil {
+                Text(loadFailure.map { L10n.format("無法開啟：%@", $0) } ?? L10n.text(status))
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.85))
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(.black.opacity(0.55), in: Capsule()).padding(16)
             }
@@ -734,7 +738,8 @@ struct MacAppScreen: View {
         }.value
         if let failure {
             HengeLog.log("macapps", "could not load \(app.name): \(failure)")
-            status = "無法開啟：\(failure)"
+            loadFailure = failure
+            status = ""
             return
         }
         status = "正在啟動…"

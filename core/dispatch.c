@@ -771,8 +771,9 @@ static void print_stats(HvCpu *cpu, int force) {
    jump gets a block that just wrote its own page back to the dispatcher. */
 static void chain(HvMachine *m, uint64_t *slot, HvBlock *b) {
     uint32_t idx = (uint32_t)(slot - m->slots);
-    if (m->gen_checks && (b->jit_gen != m->jit_gen || (m->slot_site[idx] && (uint64_t)(m->slot_site[idx] - m->jit.base) >= m->jit.used)))
-        fprintf(stderr, "hengevm: chain slot %u site %p to rx+%llx va %llx: block gen %u now %u\n", idx, (void *)m->slot_site[idx], (unsigned long long)(b->code - m->jit.base) * 4, (unsigned long long)b->va, b->jit_gen, m->jit_gen);
+    uint32_t *site = hv_jit_metadata_get(m, &m->slot_site, idx);
+    if (m->gen_checks && (b->jit_gen != m->jit_gen || (site && (uint64_t)(site - m->jit.base) >= m->jit.used)))
+        fprintf(stderr, "hengevm: chain slot %u site %p to rx+%llx va %llx: block gen %u now %u\n", idx, (void *)site, (unsigned long long)(b->code - m->jit.base) * 4, (unsigned long long)b->va, b->jit_gen, m->jit_gen);
     uint64_t xa = m->slot_xa[idx];
     if (xa) {
         /* From another page: only to the block in the physical page the exit's
@@ -790,7 +791,6 @@ static void chain(HvMachine *m, uint64_t *slot, HvBlock *b) {
         b->ram->xhead[b->pg] = idx + 1;
         m->nxchained++;
         __atomic_store_n(slot, (uint64_t)(uintptr_t)b->code, __ATOMIC_RELEASE);
-        uint32_t *site = m->slot_site[idx];
         int64_t off = site ? b->code - site : 0;
         if (site && off >= -(1 << 25) && off < (1 << 25)) {
             uint32_t insn = 0x14000000u | (uint32_t)(off & 0x3ffffff);
@@ -804,14 +804,13 @@ static void chain(HvMachine *m, uint64_t *slot, HvBlock *b) {
     }
     __atomic_store_n(slot, (uint64_t)(uintptr_t)b->code, __ATOMIC_RELEASE);
     /* And the stub's B, when the target is in its range: a direct branch, no load. */
-    uint32_t *site = m->slot_site[slot - m->slots];
     int64_t off = site ? b->code - site : 0;
     if (site && off >= -(1 << 25) && off < (1 << 25)) {
         uint32_t insn = 0x14000000u | (uint32_t)(off & 0x3ffffff);
         hv_jit_write(&m->jit, site, &insn, 4);
         hv_jit_finish_branch(&m->jit, site); /* B to B; the stub follows the slot meanwhile */
     }
-    uint32_t *cond = m->slot_cond[idx];
+    uint32_t *cond = hv_jit_metadata_get(m, &m->slot_cond, idx);
     if (cond) { /* the conditional branch to that stub, too */
         uint32_t insn = *cond;
         if (hv_branch_retarget(&insn, b->code - cond)) {

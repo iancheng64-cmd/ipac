@@ -100,8 +100,7 @@ final class Installer: NSObject, ObservableObject {
 
     static func imagePath(_ r: MacOSRelease) -> URL {
         let managed = managedImagePath(r)
-        let values = try? managed.resourceValues(forKeys: [.fileSizeKey])
-        if let size = values?.fileSize, Int64(size) > r.bytes / 2 {
+        if RestoreImageValidation.shared.validatedSize(of: managed, expectedBuild: r.id) != nil {
             return managed
         }
         if usingExternalInstallFiles, let preexisting = ExternalInstallStorage.shared.preexistingImage(for: r) {
@@ -111,21 +110,24 @@ final class Installer: NSObject, ObservableObject {
     }
 
     static func isManagedImage(_ url: URL) -> Bool {
-        url.deletingLastPathComponent().lastPathComponent == "Restore images"
+        RestoreImageValidation.isManagedFile(url, in: imageDirectory)
     }
 
     /// The size of the image ready for install, if a whole one is there (the listed sizes are rounded).
     static func imageSize(_ r: MacOSRelease) -> Int64? {
-        let values = try? imagePath(r).resourceValues(forKeys: [.fileSizeKey])
-        guard let size = values?.fileSize, Int64(size) > r.bytes / 2 else { return nil }
-        return Int64(size)
+        RestoreImageValidation.shared.validatedSize(of: imagePath(r), expectedBuild: r.id)
     }
 
     static func haveImage(_ r: MacOSRelease) -> Bool { imageSize(r) != nil }
 
     static func deleteImage(_ r: MacOSRelease) {
-        try? FileManager.default.removeItem(at: managedImagePath(r))
-        try? FileManager.default.removeItem(at: partPath(r))
+        let directory = imageDirectory
+        let target = usingExternalInstallFiles ? ExternalInstallStorage.shared.currentDriveTarget() : nil
+        let approvedRoot = target?.rootURL ?? Machines.root
+        for image in [directory.appendingPathComponent("\(r.id).ipsw"), directory.appendingPathComponent("\(r.id).part")] {
+            guard RestoreImageValidation.isManagedFile(image, in: directory) else { continue }
+            _ = try? MachineStorageSafety.removeRegularFile(image, approvedRoot: approvedRoot, validating: target)
+        }
         ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused()
     }
     /// Where a download in progress (or stopped partway) is kept.
@@ -207,28 +209,47 @@ final class Installer: NSObject, ObservableObject {
             var usedExternalFiles = false
             var vmOnExternal = false
             var driveName = "外接 SSD"
+            var installDriveTarget: ExternalDriveTarget?
+            var machineDriveTarget: ExternalDriveTarget?
+            var machineApprovedRoot: URL?
             do {
                 try checkSpace(release)
                 mode = Self.activeMode
                 usedExternalFiles = Self.usingExternalInstallFiles
                 vmOnExternal = Self.installingVMOnExternal
+                installDriveTarget = usedExternalFiles ? ExternalInstallStorage.shared.currentDriveTarget() : nil
+                guard !usedExternalFiles || installDriveTarget != nil else {
+                    throw message("外接 SSD 已中斷連線或變更，請重新選擇安裝資料夾。")
+                }
+                let imageDirectory = Self.imageDirectory
+                let externalStagingRoot = usedExternalFiles ? ExternalInstallStorage.shared.stagingRoot : nil
                 driveName = ExternalInstallStorage.shared.configuredName ?? "外接 SSD"
                 installingTargetLabel = vmOnExternal ? "外接 SSD「\(driveName)」" : "這台 \(Device.name)"
                 let rom = try await BootROM.file() // before the long download, so a problem shows up at once
                 HengeLog.log("install", "boot ROM ready (mode=\(mode.rawValue))")
-                let ipsw = try await download(release)
+                let ipsw = try await download(release, directory: imageDirectory, validating: installDriveTarget)
                 phase = .preparing
                 var mac = try await prepare(name: name, ramMB: ramMB, cpus: cpus, rom: rom, onExternal: vmOnExternal)
                 mac.osName = release.name
                 made = mac
+                machineDriveTarget = mac.isExternal ? ExternalDriveRegistry.shared.driveTarget(for: mac.id) : nil
+                machineApprovedRoot = mac.isExternal ? machineDriveTarget?.rootURL : Machines.root
                 phase = .installing
-                try await install(mac, ipsw: ipsw, cpus: cpus, useExternalWorkdir: usedExternalFiles)
-                if !keepImage && Self.isManagedImage(ipsw) {
-                    try? FileManager.default.removeItem(at: ipsw)
-                    try? FileManager.default.removeItem(at: Self.partPath(release))
+                try await install(mac, ipsw: ipsw, cpus: cpus, externalStagingRoot: externalStagingRoot,
+                                  validating: installDriveTarget)
+                if !keepImage && RestoreImageValidation.isManagedFile(ipsw, in: imageDirectory) {
+                    let approvedRoot = installDriveTarget?.rootURL ?? Machines.root
+                    _ = try? MachineStorageSafety.removeRegularFile(ipsw, approvedRoot: approvedRoot,
+                                                                    validating: installDriveTarget)
+                    _ = try? MachineStorageSafety.removeRegularFile(
+                        imageDirectory.appendingPathComponent("\(release.id).part"), approvedRoot: approvedRoot,
+                        validating: installDriveTarget
+                    )
                 }
                 Self.cleanupSystemTemporaryDownloads()
-                if usedExternalFiles {
+                if usedExternalFiles && RestoreImageValidation.canCleanRestoreWork(
+                    step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
+                ) {
                     ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused(force: true)
                 }
                 HengeLog.log("install", "\(name): installed \(release.name) (mode=\(mode.rawValue))")
@@ -250,8 +271,11 @@ final class Installer: NSObject, ObservableObject {
                             try? await Task.sleep(nanoseconds: 100_000_000)
                         }
                     }
-                    if henge_vm_state() != 1 {
-                        _ = try? Machines.safelyDeleteMachineFiles(in: made.directory, allowRemovingDirectory: true)
+                    if RestoreImageValidation.canCleanRestoreWork(
+                        step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
+                    ), let approvedRoot = machineApprovedRoot {
+                        _ = try? Machines.safelyDeleteMachineFiles(in: made.directory, allowRemovingDirectory: true,
+                                                                 approvedRoot: approvedRoot, validating: machineDriveTarget)
                         if made.isExternal {
                             ExternalDriveRegistry.shared.unregister(
                                 id: made.id,
@@ -261,7 +285,9 @@ final class Installer: NSObject, ObservableObject {
                         }
                     }
                 }
-                if usedExternalFiles {
+                if usedExternalFiles && RestoreImageValidation.canCleanRestoreWork(
+                    step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
+                ) {
                     ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused(force: true)
                 }
                 phase = .failed(error.localizedDescription)
@@ -297,24 +323,34 @@ final class Installer: NSObject, ObservableObject {
 
     // MARK: Download
 
-    private func download(_ r: MacOSRelease) async throws -> URL {
-        if Self.haveImage(r) {
-            HengeLog.log("install", "using the downloaded \(r.name)")
-            return Self.imagePath(r)
+    private func download(_ r: MacOSRelease, directory: URL, validating driveTarget: ExternalDriveTarget?) async throws -> URL {
+        try Task.checkCancellation()
+        guard driveTarget?.isAvailable != false else {
+            throw message("外接 SSD 已中斷連線或變更，下載作業已停止。")
         }
-        let dest = Self.managedImagePath(r)
-        try FileManager.default.createDirectory(at: Self.imageDirectory, withIntermediateDirectories: true)
-        Machines.excludeFromBackup(Self.imageDirectory)
+        let approvedRoot = driveTarget?.rootURL ?? Machines.root
+        let dest = directory.appendingPathComponent("\(r.id).ipsw")
+        let existing = Self.imagePath(r)
+        if MachineStorageSafety.isRegularFile(existing, within: approvedRoot),
+           RestoreImageValidation.shared.validatedSize(of: existing, expectedBuild: r.id) != nil {
+            HengeLog.log("install", "using the downloaded \(r.name)")
+            return existing
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Machines.excludeFromBackup(directory)
         phase = .downloading
         // Into a .part file next to where it ends up: an interrupted download (no network, Henge closed or killed)
         // goes on from where it stopped next time, and Install's trash button deletes a partial one too (#58).
-        let part = Self.partPath(r)
+        let part = directory.appendingPathComponent("\(r.id).part")
         received = RangedDownload.size(of: part)
         expected = r.bytes
         if received > 0 { HengeLog.log("install", "going on with \(r.name)'s download from \(ByteText.string(UInt64(received)))") }
         HengeLog.log("install", "downloading \(r.url.absoluteString)")
         for attempt in 1...20 {
-            let d = RangedDownload(url: r.url, part: part) { have, total in
+            guard driveTarget?.isAvailable != false else {
+                throw message("外接 SSD 已中斷連線或變更，下載作業已停止。")
+            }
+            let d = RangedDownload(url: r.url, part: part, approvedRoot: approvedRoot, validating: driveTarget) { have, total in
                 Task { @MainActor in
                     Installer.shared.received = have
                     if total > 0 { Installer.shared.expected = total }
@@ -322,10 +358,25 @@ final class Installer: NSObject, ObservableObject {
             }
             do {
                 try await d.run()
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.moveItem(at: part, to: dest)
+                try Task.checkCancellation()
+                guard RestoreImageValidation.shared.validatedSize(of: part, expectedBuild: r.id) != nil else {
+                    throw RestoreDownloadError.invalidImage
+                }
+                try Task.checkCancellation()
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    guard RestoreImageValidation.isManagedFile(dest, in: directory) else {
+                        throw message("映像目的路徑不是 iPac 管理的一般檔案，已保留原始檔案。")
+                    }
+                    _ = try MachineStorageSafety.removeRegularFile(dest, approvedRoot: approvedRoot, validating: driveTarget)
+                }
+                try MachineStorageSafety.promoteRegularFile(from: part, to: dest, approvedRoot: approvedRoot,
+                                                           validating: driveTarget)
                 return dest
             } catch {
+                if error is RestoreDownloadError || (error as? RangedDownload.Failure)?.shouldRestartPartialDownload == true {
+                    guard RestoreImageValidation.isManagedFile(part, in: directory) else { throw error }
+                    _ = try MachineStorageSafety.removeRegularFile(part, approvedRoot: approvedRoot, validating: driveTarget)
+                }
                 if Task.isCancelled || attempt == 20 { throw error }
                 HengeLog.log("install", "download interrupted (\(error.localizedDescription)) at \(ByteText.string(UInt64(RangedDownload.size(of: part)))); going on")
                 try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -347,7 +398,7 @@ final class Installer: NSObject, ObservableObject {
             ramMB: ramMB,
             diskBytes: 64 << 30,
             reportHostIdentity: true,
-            autoAdaptToHost: onExternal ? true : false,
+            autoAdaptToHost: false,
             cpuCount: cpus
         )
         if onExternal {
@@ -367,6 +418,25 @@ final class Installer: NSObject, ObservableObject {
         let romDest = mac.rom
         let diskDest = mac.disk
         let auxDest = mac.aux
+        let driveTarget = mac.isExternal ? ExternalDriveRegistry.shared.driveTarget(for: mac.id) : nil
+        let approvedRoot = driveTarget?.rootURL ?? Machines.root
+        var prepared = false
+        defer {
+            if !prepared {
+                _ = try? Machines.safelyDeleteMachineFiles(in: dir, allowRemovingDirectory: true,
+                                                         approvedRoot: approvedRoot, validating: driveTarget)
+                if mac.isExternal {
+                    ExternalDriveRegistry.shared.unregister(
+                        id: mac.id,
+                        releaseEvenIfMounted: false,
+                        keepURL: ExternalInstallStorage.shared.folderURL
+                    )
+                }
+            }
+        }
+        guard !mac.isExternal || driveTarget != nil else {
+            throw message("外接 SSD 已中斷連線或變更，無法建立虛擬 Mac。")
+        }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         if !onExternal {
             Machines.excludeFromBackup(Machines.root)
@@ -380,36 +450,55 @@ final class Installer: NSObject, ObservableObject {
                 throw NSError(domain: "Henge", code: 2, userInfo: [NSLocalizedDescriptionKey: "無法建立虛擬磁碟檔 disk.img。"])
             }
             let h = try FileHandle(forWritingTo: diskDest)
+            defer { try? h.close() }
             try h.truncate(atOffset: UInt64(64) << 30)
-            try h.close()
         }.value
         guard henge_make_aux(auxDest.path) == 0 else { throw message("無法建立輔助儲存區 auxiliary.bin。") }
         Machines.writePortableManifest(for: mac, in: dir)
         mac.diskBytes = 64 << 30
         HengeLog.log("install", "new machine \(name): ECID \(ecid), 64 GB disk (\(onExternal ? "external" : "internal"))")
+        prepared = true
         return mac
     }
 
     // MARK: The restore
 
-    private func install(_ mac: VirtualMac, ipsw: URL, cpus: Int, useExternalWorkdir: Bool) async throws {
+    private func install(_ mac: VirtualMac, ipsw: URL, cpus: Int, externalStagingRoot: URL?,
+                         validating driveTarget: ExternalDriveTarget?) async throws {
         guard JITBootstrap.ready else { throw message("請先開啟 JIT：安裝程式需要 JIT 才能執行 macOS 回復環境。") }
-        // The restore needs 2 GB, whatever the Mac is set to use afterwards, and gets at most 4 GB: the restore system
-        // caches the ~15 GB it writes, so it fills all the memory it is given, and 10 GB of a 12 GB iPhone's RAM in use
-        // (it is outside Henge's footprint, so iOS does not stop it) stalls the whole phone two thirds of the way through.
+        // The temporary restore environment needs 2 GB; the installed Mac keeps its selected RAM.
         var restoring = mac
-        restoring.ramMB = min(max(mac.ramMB, 2048), 4096)
+        restoring.autoAdaptToHost = false
+        restoring.ramMB = max(mac.ramMB, 2048)
         let ram = GuestMemory.prepare(restoring, requestedRAMMB: restoring.ramMB)
-        guard ram >= 2048 else { throw message("安裝需要至少 2 GB 的本機可用空間做為虛擬記憶體緩衝。") }
+        guard ram >= 2048 else {
+            throw message(GuestMemory.lastFailure ?? "安裝需要至少 2 GB 的本機可用空間做為虛擬記憶體緩衝。")
+        }
         setenv("HV_WRITE_CACHE", "0", 1) // the ~15 GB the restore writes goes straight to storage (host/disk.c); this process runs no other Mac
         let work: URL
-        if useExternalWorkdir, let staging = ExternalInstallStorage.shared.stagingRoot {
+        let approvedRoot: URL
+        let workDriveTarget: ExternalDriveTarget?
+        if let staging = externalStagingRoot {
             work = staging.appendingPathComponent("restore-\(mac.id.uuidString)", isDirectory: true)
+            approvedRoot = driveTarget?.rootURL ?? Machines.root
+            workDriveTarget = driveTarget
         } else {
             work = mac.directory.appendingPathComponent("restore", isDirectory: true)
+            workDriveTarget = mac.isExternal ? ExternalDriveRegistry.shared.driveTarget(for: mac.id) : nil
+            approvedRoot = workDriveTarget?.rootURL ?? Machines.root
+        }
+        guard workDriveTarget?.isAvailable != false else {
+            throw message("外接 SSD 已中斷連線或變更，安裝作業已停止。")
         }
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: work) }
+        defer {
+            if RestoreImageValidation.canCleanRestoreWork(
+                step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
+            ) {
+                _ = try? MachineStorageSafety.removeManagedDirectory(work, approvedRoot: approvedRoot,
+                                                                    validating: workDriveTarget)
+            }
+        }
         var buffer = [CChar](repeating: 0, count: 256)
         let rc = henge_vm_install(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, ipsw.path, work.path, ram, Int32(cpus),
                                   &buffer, buffer.count)
@@ -452,5 +541,13 @@ final class Installer: NSObject, ObservableObject {
 
     private func message(_ text: String) -> NSError {
         NSError(domain: "Henge", code: 2, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+}
+
+private enum RestoreDownloadError: LocalizedError {
+    case invalidImage
+
+    var errorDescription: String? {
+        "下載的 IPSW 不完整、內容損毀或版本不符，將重新下載；原始預拷貝映像不會被刪除。"
     }
 }

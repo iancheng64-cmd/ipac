@@ -28,7 +28,7 @@ struct JITAdviceTests {
         let cellular = JITNetworkAdvice.advice(forHelperMessage: timeout, situation: .cellularOnly)
         precondition(cellular != nil)
         let text = cellular?.message ?? ""
-        for phrase in ["LocalDevVPN", "cellular", "Cellular Data", "Control Center", "Wi-Fi", "hotspot", "Tailscale"] {
+        for phrase in ["LocalDevVPN", "行動網路", "行動數據", "控制中心", "Wi-Fi", "熱點", "Tailscale"] {
             precondition(text.contains(phrase), "cellular advice should mention \(phrase)")
         }
         precondition(!text.contains("!"))
@@ -36,15 +36,15 @@ struct JITAdviceTests {
 
         // Advice: on Wi-Fi the same timeout still means LocalDevVPN is off.
         let wifiAdvice = JITNetworkAdvice.advice(forHelperMessage: timeout, situation: .wifi)
-        precondition(wifiAdvice?.message == "Henge couldn't reach this device. Connect LocalDevVPN, then try again.")
+        precondition(wifiAdvice?.message == "Henge 無法連線到此裝置。請先開啟 LocalDevVPN 後再試一次。")
         precondition(wifiAdvice?.actions == [.connectLocalDevVPN])
 
         // Advice: a pairing error keeps the pairing advice on every network.
         let reset = "Connection reset by peer while talking to the device"
         for situation in [NetworkSituation.wifi, .cellularOnly, .offline, .wired] {
             let pairing = JITNetworkAdvice.advice(forHelperMessage: reset, situation: situation)
-            precondition(pairing?.message.contains("Pair again") == true, "pairing advice on \(situation)")
-            precondition(pairing?.message.contains("Cellular Data") == false)
+            precondition(pairing?.message.contains("重新配對") == true, "pairing advice on \(situation)")
+            precondition(pairing?.message.contains("行動數據") == false)
             precondition(pairing?.actions == [.pairAgain, .connectLocalDevVPN])
         }
 
@@ -77,8 +77,8 @@ struct JITAdviceTests {
 
         // Retry: what the screen says while it waits.
         let retrying = JITRetryPolicy.statusText(nextAttempt: 2)
-        precondition(retrying.hasPrefix("Retrying") && retrying.contains("2 of 3") && !retrying.contains("!"))
-        precondition(JITRetryPolicy.statusText(nextAttempt: 3).contains("3 of 3"))
+        precondition(retrying.hasPrefix("正透過") && retrying.contains("2/3") && !retrying.contains("!"))
+        precondition(JITRetryPolicy.statusText(nextAttempt: 3).contains("3/3"))
         print("JIT advice: all checks passed")
     }
 }

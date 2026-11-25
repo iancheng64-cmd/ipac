@@ -36,7 +36,7 @@ struct ExternalMacDisplayModifier: ViewModifier {
         if #available(iOS 27.0, *) { // the compiler requires this to call the iOS 27 sceneAccessory API
             session.sceneAccessory {
                 ExternalNonInteractiveAccessory {
-                    ExternalMacDisplay(presentation: presentation)
+                    AppLanguageScope { ExternalMacDisplay(presentation: presentation) }
                 }
             }
         } else {

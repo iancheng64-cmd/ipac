@@ -11,7 +11,7 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TP="$ROOT/third_party"
 if [ "$1" = mac ]; then
-    BUILD="$ROOT/build/mac-restore"
+    BUILD="${2:-$ROOT/build/mac-restore}"
     SDKNAME=macosx
     CC=(xcrun --sdk macosx clang -arch arm64 -mmacosx-version-min=14.0)
     CMAKE_TARGET=(-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0)
@@ -73,7 +73,7 @@ compile muxd -DPACKAGE_NAME='"usbmuxd"' -DPACKAGE_VERSION='"1.1.1-henge"' -Dmain
 compile idr -I"$TP/idevicerestore/src" -DIDEVICERESTORE_NOMAIN -DPACKAGE_NAME='"idevicerestore"' -DPACKAGE_VERSION='"1.0.0-henge"' -- \
     "$TP"/idevicerestore/src/*.c
 compile henge -std=c11 -I"$ROOT/core" -I"$ROOT/host" -I"$ROOT/devices" -- \
-    "$ROOT/host/libusb_shim.c" "$ROOT/host/install.c"
+    "$ROOT/host/libusb_shim.c" "$ROOT/host/install.c" "$ROOT/host/ipsw_validate.c"
 compile hengeobjc -fobjc-arc -- "$ROOT/host/curl_shim.m"
 
 rm -f "$BUILD/libhengerestore.a"

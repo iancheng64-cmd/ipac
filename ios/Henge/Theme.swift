@@ -35,9 +35,9 @@ enum DeskAppearance: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .system: return "跟隨系統"
-        case .light: return "淺色"
-        case .dark: return "深色"
+        case .system: return L10n.text("跟隨系統")
+        case .light: return L10n.text("淺色")
+        case .dark: return L10n.text("深色")
         }
     }
     var style: UIUserInterfaceStyle {
@@ -116,10 +116,12 @@ struct DeskButtonStyle: ButtonStyle {
 
 /// Labelled the way the page's other headings are.
 struct DeskHeading: View {
+    @Environment(\.locale) private var interfaceLocale
     let title: String
     init(_ title: String) { self.title = title }
     var body: some View {
-        Text(title)
+        let _ = interfaceLocale
+        Text(L10n.text(title))
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(Desk.dim)
             .padding(.horizontal, 18)

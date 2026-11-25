@@ -28,7 +28,9 @@ final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate, Ex
         guard let windowScene else { return }
         let window = self.window ?? UIWindow(windowScene: windowScene)
         window.backgroundColor = .black
-        window.rootViewController = UIHostingController(rootView: ExternalMacDisplay(presentation: presentation, surface: surface))
+        window.rootViewController = UIHostingController(rootView: AppLanguageScope {
+            ExternalMacDisplay(presentation: presentation, surface: surface)
+        })
         window.isHidden = false
         self.window = window
         HengeLog.log("display", "the Mac is on the external display")

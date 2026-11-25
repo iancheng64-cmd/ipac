@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds Henge for iOS and writes ~/Desktop/Henge.ipa (or ~/Desktop/Henge.tipa with --trollstore).
+# Builds Henge for iOS into a versioned folder in ~/Downloads/iPac-Releases.
 # Unsigned build, then signed ad hoc inside out with the entitlements file named by the
 # HENGE_ENTITLEMENTS environment variable (default Henge/Henge.entitlements), as Husk's
 # package_ipa.sh does: the sideloader (SideStore, AltStore, Impactor) re-signs it
@@ -8,9 +8,31 @@
 set -e
 IOS="$(cd "$(dirname "$0")/.." && pwd)"
 TROLLSTORE=false
-[ "$1" = "--trollstore" ] && TROLLSTORE=true
-OUT="${HENGE_IPA_OUT:-$HOME/Desktop/Henge.ipa}" # HENGE_IPA_OUT: somewhere else (a trial build that must not replace the one on the Desktop)
-[ "$TROLLSTORE" = true ] && OUT="$HOME/Desktop/Henge.tipa"
+PRINT_OUTPUT=false
+for arg in "$@"; do
+    case "$arg" in
+        --trollstore) TROLLSTORE=true ;;
+        --print-output) PRINT_OUTPUT=true ;;
+        *) echo "Usage: $0 [--trollstore] [--print-output]" >&2; exit 2 ;;
+    esac
+done
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$IOS/Henge/Info.plist")"
+BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$IOS/Henge/Info.plist")"
+if [[ ! "$VERSION" =~ '^[0-9]+(\.[0-9]+){1,2}$' || ! "$BUILD" =~ '^[0-9]+$' ]]; then
+    echo "Invalid version/build metadata; refusing to choose a release directory." >&2
+    exit 1
+fi
+RELEASE_ROOT="${HENGE_RELEASE_ROOT:-$HOME/Downloads/iPac-Releases}"
+RELEASE_DIR="$RELEASE_ROOT/v${VERSION}-build${BUILD}"
+EXT=ipa
+[ "$TROLLSTORE" = true ] && EXT=tipa
+OUT="${HENGE_IPA_OUT:-$RELEASE_DIR/iPac-v${VERSION}-build${BUILD}.${EXT}}"
+OUT="${OUT:a}"
+RELEASE_DIR="${RELEASE_DIR:a}"
+if [ "$PRINT_OUTPUT" = true ]; then
+    printf '%s\n' "$OUT"
+    exit 0
+fi
 [ -d "$IOS/deps/StikJIT.xcframework" ] || "$IOS/scripts/fetch_deps.sh"
 cd "$IOS"
 xcodegen generate >/dev/null
@@ -32,7 +54,8 @@ for f in "$APP/Henge" "$APP/henge-jit.js" "$APP/PlugIns/HengeJITHelper.appex/Hen
 done
 [ $rc -eq 0 ] || { echo "==> bundle is not installable; refusing to package" >&2; exit 1; }
 
-STAGE="$(mktemp -d /tmp/henge_stage.XXXXXX)"
+mkdir -p "${OUT:h}"
+STAGE="$(mktemp -d "${OUT:h}/.ipac-stage.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Payload"
 cp -R "$APP" "$STAGE/Payload/"
@@ -62,5 +85,15 @@ for k in $(plutil -convert json -o - "$ENT" | python3 -I -c 'import json, sys; p
     grep -q "$k" <<< "$EMBEDDED" || { echo "==> $k did not embed; refusing to package" >&2; exit 1; }
 done
 ( cd "$STAGE" && zip -qry "$STAGE/package.tmp" Payload )
+if [[ "${OUT:h}" == "$RELEASE_DIR" ]]; then
+    NOTES="$IOS/../docs/releases/v${VERSION}-build${BUILD}.md"
+    if [ -f "$NOTES" ]; then
+        cp "$NOTES" "$STAGE/README.md"
+    else
+        printf '# iPac v%s (Build %s)\n\nSource commit: `%s`.\n\nNo version-specific change notes were available at packaging time. Consult the GitHub release and source history for verified changes.\n' \
+            "$VERSION" "$BUILD" "$(git -C "$IOS/.." rev-parse --short=12 HEAD 2>/dev/null || echo unknown)" > "$STAGE/README.md"
+    fi
+fi
 mv -f "$STAGE/package.tmp" "$OUT" # atomic: a half-written IPA never sits where the good one was
+[ -f "$STAGE/README.md" ] && mv -f "$STAGE/README.md" "$RELEASE_DIR/README.md"
 echo "==> $OUT ($(du -h "$OUT" | cut -f1))"

@@ -39,16 +39,24 @@ enum Device {
         Int((ProcessInfo.processInfo.physicalMemory + (512 << 20)) >> 30)
     }
 
-    /// How much memory to suggest for a new Mac: what leaves this device room for iOS.
+    static var memoryBudget: GuestRAMBudget {
+        GuestRAMBudget(
+            physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            jitCacheMB: JITBootstrap.jitBytes >> 20
+        )
+    }
+
+    /// Host adaptation follows the user's full-RAM policy; warnings do not cap it.
+    static var adaptiveGuestRAMMB: Int { memoryBudget.allPhysicalRAMMB }
+
+    /// Legacy callers use whole GB; new controls preserve the detected MB value.
     static var suggestedRAMGB: Int {
-        let mb = ProcessInfo.processInfo.physicalMemory >> 20
-        // m4 fork: an 8 GB iPad (7.4 GB usable) thrashes and kills the Mac at 6 GB: 16 GB devices only.
-        // A 6 GB device (5.7 GB usable) could not build a 4 GB Mac, and installed a 3 GB one (#70); 4 GB devices, 2.
-        return mb >= 14_000 ? 8 : mb >= 10_000 ? 6 : mb >= 7_000 ? 4 : mb >= 5_000 ? 3 : 2
+        adaptiveGuestRAMMB / 1024
     }
 
     /// The choices for a Mac's memory, in GB.
     static let memoryChoices = 1...16
+    static let memoryChoicesMB = GuestRAMBudget.portableRAMRange
 
     /// Maximum virtual CPU count supported by the Henge VM engine (`HV_MAX_CPUS`).
     static let maxEngineCPUs = 8
@@ -79,17 +87,10 @@ enum Device {
         return maxFPS >= 100 ? 120 : 60
     }
 
-    /// What a choice risks on this device, if anything. An install always gets at least 2 GB (Installer.install).
+    /// Compatibility for whole-GB controls. Advice never changes the configured RAM.
     static func memoryNote(_ gb: Int) -> String? {
-        if gb < 4 { return "低於 4 GB 記憶體可能會讓 macOS 執行非常緩慢。" }
-        let aggressiveCeiling = max(suggestedRAMGB, physicalMemoryGB - 2)
-        if gb > aggressiveCeiling {
-            return "這台 \(name) 實體記憶體共 \(physicalMemoryGB) GB，設定 \(gb) GB 在 macOS 高負載時可能因系統整體記憶體耗盡而閃退（建議 \(suggestedRAMGB)–\(aggressiveCeiling) GB）。"
-        }
-        if gb > suggestedRAMGB {
-            return "高配額模式（\(gb) GB／實體 \(physicalMemoryGB) GB）：開機並掛載 JIT 後由核心免計入上限（No Footprint）直接分配，但建議預留至少 2 GB 給 iPadOS 與 GPU。"
-        }
-        return nil
+        guard memoryChoices.contains(gb) else { return "記憶體設定無效；目前可設定 1–16 GB。" }
+        return memoryBudget.notice(for: gb * 1024)?.text
     }
 
     /// The virtual CPU offers Armv8.5 instructions (core/sysreg.c), and macOS uses them. They run as
@@ -101,7 +102,9 @@ enum Device {
         return major < 13
     }()
 
-    static let chipTooOldText = "這台 \(name) 無法執行 macOS。Henge 需要 A14、M1 或更新的晶片。"
+    static var chipTooOldText: String {
+        L10n.format("這台 %@ 無法執行 macOS。Henge 需要 A14、M1 或更新的晶片。", name)
+    }
 
     /// What this device is called and the chip it has, for a Mac that reports its host
     /// (MacSettingsView → About This Mac). The table and the icon-snapping live in

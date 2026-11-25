@@ -29,13 +29,14 @@ struct HengeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            AppLanguageScope { RootView() }
                 .onOpenURL { url in HengeLog.log("app", "opened with \(url.absoluteString)") } // henge:// back from LocalDevVPN
         }
     }
 }
 
 struct RootView: View {
+    @Environment(\.locale) private var interfaceLocale
     enum Tab: Hashable { case macs, install, settings }
 
     @ObservedObject private var machines = Machines.shared
@@ -47,16 +48,17 @@ struct RootView: View {
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
 
     var body: some View {
+        let _ = interfaceLocale
         ZStack {
             TabView(selection: $tab) {
                 HomeView(running: $running, tab: $tab)
-                    .tabItem { Label("我的 Mac", systemImage: "macwindow") }
+                    .tabItem { Label(L10n.text("我的 Mac"), systemImage: "macwindow") }
                     .tag(Tab.macs)
                 InstallView()
-                    .tabItem { Label("安裝", systemImage: "arrow.down.circle") }
+                    .tabItem { Label(L10n.text("安裝"), systemImage: "arrow.down.circle") }
                     .tag(Tab.install)
                 SettingsView()
-                    .tabItem { Label("設定", systemImage: "gearshape") }
+                    .tabItem { Label(L10n.text("設定"), systemImage: "gearshape") }
                     .tag(Tab.settings)
             }
             .tint(Desk.accentLight)

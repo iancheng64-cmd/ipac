@@ -412,8 +412,11 @@ static void put_branch_exit(Emit *e, uint64_t target, int plain) {
     }
     uint64_t *slot = &e->m->slots[slot_index];
     *slot = 0;
-    e->m->slot_site[slot_index] = NULL; /* until placed: what it held is a dropped block's */
-    e->m->slot_cond[slot_index] = NULL;
+    if (hv_jit_metadata_set(e->m, &e->m->slot_site, slot_index, NULL) != 0 ||
+        hv_jit_metadata_set(e->m, &e->m->slot_cond, slot_index, NULL) != 0) {
+        e->overflow = 1;
+        return;
+    }
     e->m->slot_xa[slot_index] = xa;
     e->m->slot_xpa[slot_index] = 0;
     uint32_t to_exit = ~0u;
@@ -2038,13 +2041,14 @@ int hv_branch_retarget(uint32_t *w, int64_t off) {
 /* Each CPU places code in its own 1 MB at a time. */
 static __thread struct {
     HvMachine *m;
-    uint64_t gen;
+    uint64_t instance_id, gen;
     uint32_t *hot, *cold;
 } chunk;
 
 static int chunk_take(HvMachine *m, uint32_t hot, uint32_t cold, uint32_t **hot_at, uint32_t **cold_at) {
     uint64_t gen = __atomic_load_n(&m->jit_gen, __ATOMIC_SEQ_CST);
-    if (chunk.m != m || chunk.gen != gen || !chunk.hot || (size_t)(chunk.cold - chunk.hot) < (size_t)hot + cold) {
+    if (chunk.m != m || chunk.instance_id != m->instance_id || chunk.gen != gen || !chunk.hot ||
+        (size_t)(chunk.cold - chunk.hot) < (size_t)hot + cold) {
         size_t want = JIT_CHUNK_WORDS;
         if (want > m->jit.capacity) want = m->jit.capacity;
         if (want < (size_t)hot + cold) want = (size_t)hot + cold;
@@ -2053,7 +2057,8 @@ static int chunk_take(HvMachine *m, uint32_t hot, uint32_t cold, uint32_t **hot_
             chunk.hot = NULL;
             return -1;
         }
-        chunk.m = m, chunk.gen = gen, chunk.hot = p, chunk.cold = p + ((want + 1) & ~(size_t)1);
+        chunk.m = m, chunk.instance_id = m->instance_id, chunk.gen = gen;
+        chunk.hot = p, chunk.cold = p + ((want + 1) & ~(size_t)1);
     }
     *hot_at = chunk.hot;
     chunk.hot += hot;
@@ -2107,9 +2112,11 @@ int hv_translate_place(HvMachine *m, HvBlock *b) {
     hv_jit_finish2(&m->jit, dst, e->nhot, e->flat ? NULL : cold, e->flat ? 0 : e->ncold); /* one wait for both parts */
     b->code = dst;
     for (uint32_t k = 0; k < e->nsite; k++) {
-        m->slot_site[e->site[k].slot] = (e->site[k].cold ? cold : dst) + e->site[k].at;
-        m->slot_stub[e->site[k].slot] = (e->site[k].stub_cold ? cold : dst) + e->site[k].stub;
-        m->slot_cond[e->site[k].slot] = e->site[k].has_cond ? dst + e->site[k].cond_at : NULL;
+        uint32_t slot = e->site[k].slot;
+        if (hv_jit_metadata_set(m, &m->slot_site, slot, (e->site[k].cold ? cold : dst) + e->site[k].at) != 0 ||
+            hv_jit_metadata_set(m, &m->slot_stub, slot, (e->site[k].stub_cold ? cold : dst) + e->site[k].stub) != 0 ||
+            hv_jit_metadata_set(m, &m->slot_cond, slot, e->site[k].has_cond ? dst + e->site[k].cond_at : NULL) != 0)
+            return -1;
     }
     return 0;
 }

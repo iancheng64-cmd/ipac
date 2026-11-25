@@ -11,7 +11,7 @@
 # your certificate carries it, and Henge falls back to file-backed guest RAM
 # without it.
 
-name: Build Henge IPA
+name: Build iPac IPA
 
 # Manual only (Actions tab > Build Henge IPA > Run workflow): pushes to main don't build an IPA.
 on:
@@ -19,6 +19,7 @@ on:
 
 env:
   HUSK: ${{ github.workspace }}/Husk
+  HENGE_RELEASE_ROOT: ${{ github.workspace }}/iPac-Releases
   # The Makefile takes its slirp headers from IOS_DEPS, not HUSK:
   #   IOS_DEPS ?= $(HOME)/Documents/Coding/Husk/build/ios-arm64/sysroot
   # (HUSK is only read by ios/scripts/fetch_deps.sh.)
@@ -101,20 +102,24 @@ jobs:
         working-directory: Henge
         run: zsh ios/scripts/package_ipa.sh
 
-      - name: Upload Henge.ipa
+      - name: Upload iPac IPA and version notes
         uses: actions/upload-artifact@v4
         with:
-          name: Henge-ipa-${{ github.sha }}
-          path: /Users/runner/Desktop/Henge.ipa
+          name: iPac-ipa-${{ github.sha }}
+          path: |
+            iPac-Releases/**/*.ipa
+            iPac-Releases/**/README.md
           if-no-files-found: error
 
       - name: Package Henge.tipa
         working-directory: Henge
         run: zsh ios/scripts/package_ipa.sh --trollstore
 
-      - name: Upload Henge.tipa
+      - name: Upload iPac TIPA and version notes
         uses: actions/upload-artifact@v4
         with:
-          name: Henge-tipa-${{ github.sha }}
-          path: /Users/runner/Desktop/Henge.tipa
+          name: iPac-tipa-${{ github.sha }}
+          path: |
+            iPac-Releases/**/*.tipa
+            iPac-Releases/**/README.md
           if-no-files-found: error
