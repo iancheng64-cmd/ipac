@@ -22,6 +22,19 @@ if [[ ! "$VERSION" =~ '^[0-9]+(\.[0-9]+){1,2}$' || ! "$BUILD" =~ '^[0-9]+$' ]]; 
     echo "Invalid version/build metadata; refusing to choose a release directory." >&2
     exit 1
 fi
+check_version_build() {
+    local plist="$1" label="$2" actual_version actual_build
+    if ! actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null)" ||
+       ! actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null)"; then
+        echo "$label is missing readable version/build metadata; refusing to package." >&2
+        return 1
+    fi
+    if [[ "$actual_version" != "$VERSION" || "$actual_build" != "$BUILD" ]]; then
+        printf '%s version/build mismatch: expected %s/%s, found %s/%s; refusing to package.\n' \
+            "$label" "$VERSION" "$BUILD" "$actual_version" "$actual_build" >&2
+        return 1
+    fi
+}
 RELEASE_ROOT="${HENGE_RELEASE_ROOT:-$HOME/Downloads/iPac-Releases}"
 RELEASE_DIR="$RELEASE_ROOT/v${VERSION}-build${BUILD}"
 EXT=ipa
@@ -33,6 +46,7 @@ if [ "$PRINT_OUTPUT" = true ]; then
     printf '%s\n' "$OUT"
     exit 0
 fi
+check_version_build "$IOS/HengeJITHelper/Info.plist" "JIT helper source"
 [ -d "$IOS/deps/StikJIT.xcframework" ] || "$IOS/scripts/fetch_deps.sh"
 cd "$IOS"
 xcodegen generate >/dev/null
@@ -47,6 +61,8 @@ xcodebuild -project Henge.xcodeproj -scheme Henge -configuration Release -sdk ip
 }
 grep -E "BUILD" "$DD.buildlog" || true
 APP="$DD/Build/Products/Release-iphoneos/Henge.app"
+check_version_build "$APP/Info.plist" "Built main app"
+check_version_build "$APP/PlugIns/HengeJITHelper.appex/Info.plist" "Built JIT helper"
 rc=0
 for f in "$APP/Henge" "$APP/henge-jit.js" "$APP/PlugIns/HengeJITHelper.appex/HengeJITHelper" \
          "$APP/Frameworks/StikJIT.framework/StikJIT" "$APP/Frameworks/StikJIT.framework/Info.plist"; do
