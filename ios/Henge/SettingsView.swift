@@ -29,6 +29,7 @@ struct SettingsView: View {
     @AppStorage(MacAppsFeature.key) private var macApps = false
     @State private var pickingExternalFolder = false
     @State private var ssdDialog: SSDDialog?
+    @State private var showMoreRam = false
 
     private var inputDescription: String {
         if inputMode == .touchscreen {
@@ -75,12 +76,22 @@ struct SettingsView: View {
                 }
                 .listRowBackground(Desk.card)
                 Section("記憶體配額") {
-                    LabeledContent("額外記憶體擴充", value: Entitlements.increasedMemory ? "已啟用" : "未啟用")
-                    LabeledContent("App 上限", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
+                    LabeledContent("裝置實體記憶體", value: "\(Device.physicalMemoryGB) GB")
+                    LabeledContent("大記憶體 Entitlement", value: Entitlements.increasedMemory ? "已啟用" : "未啟用")
+                    LabeledContent("App 上限（啟動時）", value: ByteText.string(UInt64(Entitlements.memoryLimitAtLaunch)))
                     LabeledContent("可用記憶體空間", value: ByteText.string(UInt64(henge_available_memory())))
+                    LabeledContent("核心 No Footprint 狀態", value: henge_vm_can_no_footprint() != 0 ? "可使用" : "待機（附加 JIT 後啟用）")
+                    Button {
+                        showMoreRam = true
+                    } label: {
+                        Label(
+                            Entitlements.increasedMemory ? "管理大記憶體權限（內建 GetMoreRam）…" : "解鎖最大記憶體（內建 GetMoreRam）…",
+                            systemImage: "memorychip"
+                        )
+                    }
                     Text(Entitlements.increasedMemory
-                         ? "開啟 JIT 後，虛擬 Mac 記憶體可獨立於 App 記憶體上限之外配置；若遭系統拒絕則改由儲存空間緩衝。"
-                         : "目前憑證未包含額外記憶體權限（Increased Memory Limit），建議使用支援此權限的憑證重新簽署安裝。")
+                         ? "已具備大記憶體權限。開機並掛載 JIT 後，虛擬 Mac 記憶體由核心以 LEDGER_NO_FOOTPRINT 免計入 App 上限。"
+                         : "目前憑證未包含 INCREASED_MEMORY_LIMIT 權限。點上方「解鎖最大記憶體（內建 GetMoreRam）」登入 Apple ID 即可一鍵開通。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .listRowBackground(Desk.card)
@@ -217,7 +228,7 @@ struct SettingsView: View {
                         Text(err).font(.footnote).foregroundStyle(Desk.bad)
                     }
                     LabeledContent("硬體識別規格", value: "\(Device.marketingName) (\(Device.chipName ?? "arm64"))")
-                    LabeledContent("版本", value: "0.3.0 (Build 106 • iPac 繁體中文・可攜式 SSD)")
+                    LabeledContent("版本", value: "0.4.0 (Build 107 • iPac 繁體中文・內建 GetMoreRam)")
                 }
                 .listRowBackground(Desk.card)
                 Section("診斷日誌") {
@@ -232,6 +243,9 @@ struct SettingsView: View {
                 if case let .success(url) = result {
                     _ = extStorage.selectFolder(url)
                 }
+            }
+            .sheet(isPresented: $showMoreRam) {
+                MoreRamView()
             }
             .confirmationDialog(
                 ssdDialogTitle,

@@ -34,6 +34,11 @@ enum Device {
         return (Int((Double(s.width) / 264 * 25.4).rounded()), Int((Double(s.height) / 264 * 25.4).rounded()))
     }
 
+    /// Physical RAM of this iPad/iPhone rounded to nearest GB.
+    static var physicalMemoryGB: Int {
+        Int((ProcessInfo.processInfo.physicalMemory + (512 << 20)) >> 30)
+    }
+
     /// How much memory to suggest for a new Mac: what leaves this device room for iOS.
     static var suggestedRAMGB: Int {
         let mb = ProcessInfo.processInfo.physicalMemory >> 20
@@ -45,8 +50,28 @@ enum Device {
     /// The choices for a Mac's memory, in GB.
     static let memoryChoices = 1...16
 
+    /// Maximum virtual CPU count supported by the Henge VM engine (`HV_MAX_CPUS`).
+    static let maxEngineCPUs = 8
+
+    /// Maximum assignable CPU count on this host device.
+    static var maxCPUCount: Int {
+        max(1, min(maxEngineCPUs, ProcessInfo.processInfo.activeProcessorCount))
+    }
+
     static var maxSafeCPUs: Int {
         max(1, min(6, ProcessInfo.processInfo.activeProcessorCount - 1))
+    }
+
+    static var quickRAMChoicesGB: [Int] {
+        let choices = physicalMemoryGB >= 14 ? [4, 6, 8, 12]
+            : physicalMemoryGB >= 10 ? [4, 6, 8]
+            : physicalMemoryGB >= 7 ? [2, 4, 6]
+            : [2, 3, 4]
+        return choices.filter { memoryChoices.contains($0) }
+    }
+
+    static var quickCPUChoices: [Int] {
+        [2, 4, 6, 8].filter { $0 <= maxCPUCount }
     }
 
     static var maxDisplayRefreshHz: Int {
@@ -57,7 +82,13 @@ enum Device {
     /// What a choice risks on this device, if anything. An install always gets at least 2 GB (Installer.install).
     static func memoryNote(_ gb: Int) -> String? {
         if gb < 4 { return "低於 4 GB 記憶體可能會讓 macOS 執行非常緩慢。" }
-        if gb > suggestedRAMGB { return "超過 \(suggestedRAMGB) GB 對這台 \(name) 負荷過高：macOS 忙碌時 iOS 可能會強制關閉 Henge。" }
+        let aggressiveCeiling = max(suggestedRAMGB, physicalMemoryGB - 2)
+        if gb > aggressiveCeiling {
+            return "這台 \(name) 實體記憶體共 \(physicalMemoryGB) GB，設定 \(gb) GB 在 macOS 高負載時可能因系統整體記憶體耗盡而閃退（建議 \(suggestedRAMGB)–\(aggressiveCeiling) GB）。"
+        }
+        if gb > suggestedRAMGB {
+            return "高配額模式（\(gb) GB／實體 \(physicalMemoryGB) GB）：開機並掛載 JIT 後由核心免計入上限（No Footprint）直接分配，但建議預留至少 2 GB 給 iPadOS 與 GPU。"
+        }
         return nil
     }
 

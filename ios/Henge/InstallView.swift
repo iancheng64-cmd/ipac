@@ -331,6 +331,16 @@ struct InstallView: View {
                     .padding(.bottom, 10)
             }
             Rectangle().fill(Desk.hairline).frame(height: 0.5)
+            Stepper(value: $cpus, in: 1...Device.maxCPUCount) {
+                HStack {
+                    Text("CPU 核心數").font(.system(size: 16))
+                    Spacer()
+                    Text("\(cpus) 核心").font(.system(size: 16, weight: .semibold))
+                }
+            }
+            .padding(.horizontal, 17)
+            .padding(.vertical, 10)
+            Rectangle().fill(Desk.hairline).frame(height: 0.5)
             Toggle(extStorage.mode.needsExternalDrive ? "安裝後自動清除安裝暫存檔" : "安裝後刪除下載映像檔", isOn: $deleteAfter)
                 .font(.system(size: 16))
                 .padding(.horizontal, 17)

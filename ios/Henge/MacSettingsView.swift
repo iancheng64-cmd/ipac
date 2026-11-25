@@ -14,10 +14,14 @@ struct MacSettingsView: View {
     @State private var activeDialog: ManageDialog?
     @State private var movingExport = false
     @State private var pickingReconnect = false
+    @State private var showMoreRam = false
     @State private var removed = false
-    @AppStorage("henge.cpus") private var cpus = 4
 
     init(mac: VirtualMac) { _mac = State(initialValue: mac) }
+
+    private var hardwareLocked: Bool {
+        machines.deleting != nil || machines.moving != nil || Machines.isVMRunning
+    }
 
     private var dialogTitle: String {
         switch activeDialog {
@@ -40,6 +44,11 @@ struct MacSettingsView: View {
                     .padding(.top, 12)
                 }
 
+                if Machines.isVMRunning {
+                    NoticeRow(symbol: "info.circle.fill", text: "虛擬機目前執行中，請先關機後再調整記憶體、CPU 與磁碟設定。", trailing: nil, tint: Desk.warn)
+                        .padding(.top, 12)
+                }
+
                 DeskHeading("名稱")
                 TextField("名稱", text: $mac.name)
                     .font(.system(size: 16))
@@ -55,11 +64,14 @@ struct MacSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("自動依此 \(Device.name) 調整 RAM 與螢幕", isOn: Binding(
                             get: { mac.adaptsToHost },
-                            set: { mac.autoAdaptToHost = $0; save() }
+                            set: {
+                                mac.autoAdaptToHost = $0
+                                save()
+                            }
                         ))
                         .font(.system(size: 16))
-                        .disabled(machines.deleting != nil || machines.moving != nil)
-                        Text("將外接 SSD 插到不同機型的 iPad 時，會自動調整安全記憶體上限（這台 \(Device.name) 為 \(Device.suggestedRAMGB) GB）、核心數與滿版螢幕比例，同時完整保留系統身分與資料。")
+                        .disabled(hardwareLocked)
+                        Text("開啟時，插到不同機型 iPad 會自動以安全上限（這台 \(Device.name) 為 \(Device.suggestedRAMGB) GB、\(Device.maxSafeCPUs) 核心）與滿版螢幕啟動；隨時可關閉或在下方手動覆寫。")
                             .font(.system(size: 13)).foregroundStyle(Desk.dim)
                     }
                     .padding(17)
@@ -68,44 +80,113 @@ struct MacSettingsView: View {
 
                 DeskHeading("記憶體")
                 VStack(alignment: .leading, spacing: 12) {
-                    if mac.adaptsToHost {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("自動 · \(mac.effectiveRAMMB / 1024) GB").font(.system(size: 26, weight: .bold))
-                            Spacer()
-                            Text(Entitlements.increasedMemory ? "開啟 JIT 後不受 App 記憶體上限限制" : "不足時使用本機儲存空間緩衝")
-                                .font(.system(size: 13)).foregroundStyle(Desk.dim).multilineTextAlignment(.trailing)
+                    let currentRAMGB = max(1, (mac.adaptsToHost ? mac.effectiveRAMMB : mac.ramMB) / 1024)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(mac.adaptsToHost ? "自動 · \(currentRAMGB) GB" : "\(currentRAMGB) GB")
+                            .font(.system(size: 26, weight: .bold))
+                        Spacer()
+                        Text(Entitlements.increasedMemory ? "開啟 JIT 後不受 App 記憶體上限限制" : "尚未解鎖 Apple 大記憶體權限")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Entitlements.increasedMemory ? Desk.dim : Desk.warn)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Stepper(
+                        "記憶體容量",
+                        value: Binding(
+                            get: { currentRAMGB },
+                            set: { newGB in
+                                mac.autoAdaptToHost = false
+                                mac.ramMB = newGB * 1024
+                                save()
+                            }
+                        ),
+                        in: Device.memoryChoices
+                    )
+                    .font(.system(size: 16))
+                    .disabled(hardwareLocked)
+
+                    HStack(spacing: 8) {
+                        ForEach(Device.quickRAMChoicesGB, id: \.self) { gb in
+                            let selected = !mac.adaptsToHost && (mac.ramMB / 1024 == gb)
+                            Button("\(gb) GB") {
+                                mac.autoAdaptToHost = false
+                                mac.ramMB = gb * 1024
+                                save()
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(selected ? Desk.accent : Desk.raised.opacity(0.6), in: Capsule())
+                            .foregroundStyle(selected ? Color.white : Desk.text)
+                            .disabled(hardwareLocked)
                         }
-                        Text("已自動為這台 \(Device.name) 配對安全值 \(Device.suggestedRAMGB) GB（關閉上方「隨身 SSD 自動適配」可改回手動調整）。")
-                            .font(.system(size: 13)).foregroundStyle(Desk.dim)
+                    }
+
+                    if let note = Device.memoryNote(currentRAMGB) {
+                        Text(note).font(.system(size: 13)).foregroundStyle(Desk.dim)
                     } else {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("\(mac.ramMB / 1024) GB").font(.system(size: 26, weight: .bold))
-                            Spacer()
-                            Text(Entitlements.increasedMemory ? "開啟 JIT 後不受 App 記憶體上限限制" : "不足時使用本機儲存空間緩衝")
-                                .font(.system(size: 13)).foregroundStyle(Desk.dim).multilineTextAlignment(.trailing)
-                        }
-                        Stepper("記憶體容量", value: Binding(get: { mac.ramMB / 1024 }, set: { mac.ramMB = $0 * 1024; save() }), in: Device.memoryChoices)
-                            .font(.system(size: 16))
-                            .disabled(machines.deleting != nil || machines.moving != nil)
-                        if let note = Device.memoryNote(mac.ramMB / 1024) {
-                            Text(note).font(.system(size: 13)).foregroundStyle(Desk.dim)
-                        }
+                        Text("調整後會自動儲存，下次開機立即套用（這台 \(Device.name) 實體記憶體共 \(Device.physicalMemoryGB) GB）。")
+                            .font(.system(size: 13)).foregroundStyle(Desk.dim)
+                    }
+
+                    Button {
+                        showMoreRam = true
+                    } label: {
+                        Label(
+                            Entitlements.increasedMemory ? "檢查大記憶體權限（內建 GetMoreRam）…" : "使用內建 GetMoreRam 解鎖大記憶體…",
+                            systemImage: "memorychip"
+                        )
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Entitlements.increasedMemory ? Desk.accentLight : Desk.warn)
                     }
                 }
                 .padding(17)
                 .deskCard()
 
                 DeskHeading("處理器")
-                Stepper(value: $cpus, in: 1...6) {
-                    HStack {
-                        Text("CPU 核心數").font(.system(size: 16))
-                        Spacer()
-                        Text("\(cpus)").font(.system(size: 16, weight: .semibold))
+                VStack(alignment: .leading, spacing: 12) {
+                    let currentCPUs = mac.effectiveCPUs
+                    Stepper(
+                        value: Binding(
+                            get: { currentCPUs },
+                            set: { newCPUs in
+                                mac.autoAdaptToHost = false
+                                mac.cpuCount = max(1, min(Device.maxCPUCount, newCPUs))
+                                save()
+                            }
+                        ),
+                        in: 1...Device.maxCPUCount
+                    ) {
+                        HStack {
+                            Text("CPU 核心數").font(.system(size: 16))
+                            Spacer()
+                            Text(mac.adaptsToHost ? "自動 · \(currentCPUs) 核心" : "\(currentCPUs) 核心")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
                     }
+                    .disabled(hardwareLocked)
+
+                    HStack(spacing: 8) {
+                        ForEach(Device.quickCPUChoices, id: \.self) { count in
+                            let selected = !mac.adaptsToHost && currentCPUs == count
+                            Button("\(count) 核心") {
+                                mac.autoAdaptToHost = false
+                                mac.cpuCount = count
+                                save()
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(selected ? Desk.accent : Desk.raised.opacity(0.6), in: Capsule())
+                            .foregroundStyle(selected ? Color.white : Desk.text)
+                            .disabled(hardwareLocked)
+                        }
+                    }
+
+                    Text("專屬此 Mac 的設定（此 \(Device.name) 最高支援 \(Device.maxCPUCount) 核心），在關機狀態下調整後將於下次開機自動套用。")
+                        .font(.system(size: 13)).foregroundStyle(Desk.dim)
                 }
-                .disabled(machines.deleting != nil || machines.moving != nil)
-                .padding(.horizontal, 17)
-                .padding(.vertical, 10)
+                .padding(17)
                 .deskCard()
 
                 DeskHeading("關於這台 Mac")
@@ -256,6 +337,9 @@ struct MacSettingsView: View {
         .navigationTitle(mac.name)
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear(perform: save)
+        .sheet(isPresented: $showMoreRam) {
+            MoreRamView()
+        }
         .fileImporter(isPresented: $pickingReconnect, allowedContentTypes: [.folder]) { result in
             if case let .success(url) = result {
                 if machines.reconnectExternal(mac, to: url),
@@ -384,6 +468,9 @@ struct MacSettingsView: View {
         guard !removed, machines.deleting == nil, machines.moving == nil else { return }
         if mac.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { mac.name = "Mac" }
         guard let current = machines.all.first(where: { $0.id == mac.id }), current != mac else { return }
+        if current.ramMB != mac.ramMB || current.cpuCount != mac.cpuCount || current.autoAdaptToHost != mac.autoAdaptToHost {
+            InstantResume.discard(for: mac)
+        }
         machines.update(mac)
     }
 }

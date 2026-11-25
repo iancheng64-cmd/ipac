@@ -32,10 +32,22 @@ struct VirtualMac: Identifiable, Codable, Hashable {
     var autoAdaptToHost: Bool?
     /// Relative path from the bookmarked folder to the Mac's directory when stored outside standard `HengeMachines/<id>`.
     var externalRelativePath: String?
+    /// Per-Mac virtual CPU count (nil = inherit legacy default until adjusted in settings).
+    var cpuCount: Int?
 
     var isExternal: Bool { externalFolderBookmark != nil }
     var adaptsToHost: Bool { autoAdaptToHost ?? isExternal }
     var effectiveRAMMB: Int { adaptsToHost ? Device.suggestedRAMGB * 1024 : ramMB }
+    var configuredCPUs: Int {
+        if let cpuCount { return max(1, min(Device.maxEngineCPUs, cpuCount)) }
+        let legacy = UserDefaults.standard.integer(forKey: "henge.cpus")
+        let fallback = legacy > 0 ? legacy : min(4, Device.maxCPUCount)
+        return max(1, min(Device.maxEngineCPUs, fallback))
+    }
+    var effectiveCPUs: Int {
+        let cap = adaptsToHost ? Device.maxSafeCPUs : Device.maxCPUCount
+        return max(1, min(configuredCPUs, cap))
+    }
     var isAvailable: Bool { Machines.isAvailable(self) }
     var locationLabel: String { isExternal ? (externalDriveName ?? "外接硬碟") : "此 \(Device.name)" }
     var isRetina: Bool { Device.isPad && (retina ?? false) }
@@ -57,23 +69,27 @@ struct VirtualMac: Identifiable, Codable, Hashable {
 /// a file beside the disk: iOS's memory limit does not count a mapped file's pages either.
 enum GuestMemory {
     /// Points the engine at the file (it is unlinked as soon as it is open) and returns the size that fits.
-    /// Always uses internal APFS storage (`Machines.root/ram.tmp`), never an external USB drive.
+    /// When `LEDGER_NO_FOOTPRINT` is available (after JIT debugger attaches), VM RAM does not count toward
+    /// app footprint or consume disk backing, so internal free storage does not clamp guest RAM.
     static func prepare(_ mac: VirtualMac, requestedRAMMB: Int? = nil) -> UInt64 {
         henge_ios_release_high_hold()
         try? FileManager.default.createDirectory(at: Machines.root, withIntermediateDirectories: true)
         let file = Machines.root.appendingPathComponent("ram.tmp")
         setenv("HV_RAM_FILE", file.path, 1)
+        let noFootprint = henge_vm_can_no_footprint() != 0
         let free = ExternalInstallStorage.volumeFreeBytes(at: Machines.root)
-        let room = free > 0 ? UInt64(max(free - (2 << 30), 0)) >> 20 : UInt64.max
+        let room: UInt64 = noFootprint
+            ? UInt64.max
+            : (free > 0 ? UInt64(max(free - (2 << 30), 0)) >> 20 : UInt64.max)
         let reach = henge_largest_mapping_mb()
-        let jitMetaMB = UInt64((JITBootstrap.jitBytes >> 20) + 512)
-        let headroom = reach > jitMetaMB ? reach - jitMetaMB : (reach > 512 ? reach - 512 : 0)
+        let headroom = reach > 512 ? reach - 512 : reach
         let rawTarget = requestedRAMMB ?? mac.effectiveRAMMB
         let targetMB = (requestedRAMMB == nil && mac.adaptsToHost)
             ? min(UInt64(rawTarget), UInt64(Device.suggestedRAMGB) * 1024)
             : UInt64(rawTarget)
         let ram = min(targetMB, room, headroom) / 512 * 512
-        HengeLog.log("session", "guest RAM \(ram) MB (requested \(targetMB), host suggested \(Device.suggestedRAMGB * 1024), autoAdapt \(mac.adaptsToHost), internal room \(room), largest mapping \(reach))")
+        let roomNote = noFootprint ? "no-footprint" : "\(room) MB"
+        HengeLog.log("session", "guest RAM \(ram) MB (requested \(targetMB), physical \(Device.physicalMemoryGB) GB, noFootprint \(noFootprint), autoAdapt \(mac.adaptsToHost), internal room \(roomNote), largest mapping \(reach))")
         return ram
     }
 }
@@ -85,6 +101,7 @@ private struct MachineFile: Codable {
     var ecid: UInt64
     var seed: UInt64?
     var ramMB: Int?
+    var cpuCount: Int?
     var diskBytes: Int64?
     var osName: String?
     var lastUsed: Date?
@@ -258,6 +275,7 @@ final class Machines: ObservableObject {
             ecid: mac.ecid,
             seed: mac.seed,
             ramMB: mac.ramMB,
+            cpuCount: mac.cpuCount,
             diskBytes: mac.diskBytes,
             osName: mac.osName,
             lastUsed: mac.lastUsed,
@@ -303,7 +321,8 @@ final class Machines: ObservableObject {
                let info = try? JSONDecoder().decode(MachineFile.self, from: data),
                fm.fileExists(atPath: item.appendingPathComponent("disk.img").path) {
                 var mac = VirtualMac(id: id, name: info.name ?? "Mac", ecid: info.ecid, seed: info.seed ?? 0,
-                                     ramMB: info.ramMB ?? Device.suggestedRAMGB * 1024, diskBytes: 64 << 30)
+                                     ramMB: info.ramMB ?? Device.suggestedRAMGB * 1024, diskBytes: 64 << 30,
+                                     cpuCount: info.cpuCount)
                 let os = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 mac.osName = os.isEmpty ? nil : os
                 (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
@@ -373,7 +392,7 @@ final class Machines: ObservableObject {
             let missing = Self.required.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
             guard missing.isEmpty, Self.hasDisk(folder) else { throw message("資料夾缺少必要檔案：\((missing + (Self.hasDisk(folder) ? [] : ["disk.img"])).joined(separator: ", "))。") }
             var mac = VirtualMac(name: info.name ?? folder.lastPathComponent, ecid: info.ecid, seed: info.seed ?? 0,
-                                 ramMB: info.ramMB ?? 2048, diskBytes: 0)
+                                 ramMB: info.ramMB ?? 2048, diskBytes: 0, cpuCount: info.cpuCount)
             importing = mac.name
             unpacked = 0
             let dest = mac.directory
@@ -1039,7 +1058,8 @@ final class Machines: ObservableObject {
             externalFolderBookmark: bookmark,
             externalDriveName: driveName,
             autoAdaptToHost: info.portableAutoAdapt ?? true,
-            externalRelativePath: storedRelPath
+            externalRelativePath: storedRelPath,
+            cpuCount: info.cpuCount
         )
         (mac.screenWidth, mac.screenHeight) = Device.fittingScreen
         ExternalDriveRegistry.shared.register(id: mac.id, folderURL: baseURL, relativePath: storedRelPath)

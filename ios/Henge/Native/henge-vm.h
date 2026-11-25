@@ -118,5 +118,9 @@ uint64_t henge_largest_reservation_gb(void); /* measuring: the biggest PROT_NONE
 uint64_t henge_largest_mapping_mb(void);
 /* Bytes this process may still allocate before jetsam (os_proc_available_memory). */
 size_t henge_available_memory(void);
+/* Current guest RAM backing mode: 1 = LEDGER_NO_FOOTPRINT, 2 = file mmap, 3 = anonymous mmap, 0 = not running. */
+int henge_vm_ram_mode(void);
+/* 1 if mach_memory_entry_ownership(LEDGER_NO_FOOTPRINT) succeeds right now, else 0. */
+int henge_vm_can_no_footprint(void);
 
 #endif

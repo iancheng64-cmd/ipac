@@ -73,6 +73,7 @@ typedef struct HvVmapple {
     uint8_t *cfg, *rom, *ram;
     uint64_t ram_size;
     int ram_fd;              /* the file under guest RAM, kept open for the balloon's holes, or -1 */
+    int ram_mode;            /* 1 = LEDGER_NO_FOOTPRINT, 2 = file-backed mmap, 3 = anonymous mmap */
     uint64_t panic_events;   /* last pvpanic event the guest reported */
     void *ctrr, *sealed;
     pthread_t prefault_thread;
@@ -91,5 +92,6 @@ void hv_vmapple_reset_cpu(HvVmapple *b);
 /* No CPU or host device callback may be using the board. */
 void hv_vmapple_destroy(HvVmapple *b);
 uint8_t *hv_vmapple_avp_regs(void *avp);
+int hv_vmapple_can_no_footprint(void);
 
 #endif

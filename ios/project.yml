@@ -22,6 +22,11 @@ settings:
       - "-mcpu=apple-m1"
     CLANG_C_LANGUAGE_STANDARD: c11
 
+packages:
+  StosSign:
+    url: https://github.com/stossy11/StosSign
+    revision: 01dd7bc4f5084ade9e2ebbc7e338dc2e3f454d77
+
 targets:
   Henge:
     type: application
@@ -107,6 +112,12 @@ targets:
     dependencies:
       # Built-in StikJIT's debugger process. Embedded into PlugIns/.
       - target: HengeJITHelper
+      - package: StosSign
+        product: StosSign_API
+      - package: StosSign
+        product: StosSign_Auth
+      - package: StosSign
+        product: StosSign_Common
     preBuildScripts:
       - name: Build the engine
         script: |

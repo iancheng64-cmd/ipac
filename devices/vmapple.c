@@ -171,16 +171,41 @@ static void gic_msi_write(void *opaque, uint64_t off, uint64_t v, unsigned size)
    if it is refused. In pieces, as one memory entry has a size limit. */
 extern kern_return_t mach_memory_entry_ownership(mach_port_t entry, task_t owner, int ledger_tag, int ledger_flags);
 
+enum {
+    HV_MAP_MEM_LEDGER_TAGGED = 0x002000,
+    HV_MAP_MEM_NAMED_CREATE = 0x020000,
+    HV_LEDGER_TAG_DEFAULT = 1,
+    HV_LEDGER_NO_FOOTPRINT = 1
+};
+
+int hv_vmapple_can_no_footprint(void) {
+    if (getenv("HV_RAM_NO_LEDGER")) return 0;
+    memory_object_size_t got = 16384;
+    mach_port_t entry = MACH_PORT_NULL;
+    kern_return_t kr = mach_make_memory_entry_64(
+        mach_task_self(), &got, 0,
+        HV_MAP_MEM_NAMED_CREATE | HV_MAP_MEM_LEDGER_TAGGED | VM_PROT_READ | VM_PROT_WRITE,
+        &entry, MACH_PORT_NULL);
+    if (kr == KERN_SUCCESS)
+        kr = mach_memory_entry_ownership(entry, TASK_NULL, HV_LEDGER_TAG_DEFAULT, HV_LEDGER_NO_FOOTPRINT);
+    if (entry != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), entry);
+    return kr == KERN_SUCCESS ? 1 : 0;
+}
+
 static uint8_t *alloc_no_footprint(uint64_t size) {
-    enum { CHUNK = 128u << 20, MAP_MEM_LEDGER_TAGGED_ = 0x002000, MAP_MEM_NAMED_CREATE_ = 0x020000, LEDGER_TAG_DEFAULT = 1, LEDGER_NO_FOOTPRINT = 1 };
+    enum { CHUNK = 128u << 20 };
     vm_address_t base = 0;
     if (vm_allocate(mach_task_self(), &base, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return NULL;
     for (uint64_t off = 0; off < size; off += CHUNK) {
         uint64_t len = size - off < CHUNK ? size - off : CHUNK;
         memory_object_size_t got = len;
         mach_port_t entry = MACH_PORT_NULL;
-        kern_return_t kr = mach_make_memory_entry_64(mach_task_self(), &got, 0, MAP_MEM_NAMED_CREATE_ | MAP_MEM_LEDGER_TAGGED_ | VM_PROT_READ | VM_PROT_WRITE, &entry, MACH_PORT_NULL);
-        if (kr == KERN_SUCCESS) kr = mach_memory_entry_ownership(entry, TASK_NULL, LEDGER_TAG_DEFAULT, LEDGER_NO_FOOTPRINT);
+        kern_return_t kr = mach_make_memory_entry_64(
+            mach_task_self(), &got, 0,
+            HV_MAP_MEM_NAMED_CREATE | HV_MAP_MEM_LEDGER_TAGGED | VM_PROT_READ | VM_PROT_WRITE,
+            &entry, MACH_PORT_NULL);
+        if (kr == KERN_SUCCESS)
+            kr = mach_memory_entry_ownership(entry, TASK_NULL, HV_LEDGER_TAG_DEFAULT, HV_LEDGER_NO_FOOTPRINT);
         if (kr == KERN_SUCCESS) {
             vm_address_t to = base + off;
             kr = vm_map(mach_task_self(), &to, len, 0, VM_FLAGS_OVERWRITE, entry, 0, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
@@ -264,7 +289,10 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
     b->ram = MAP_FAILED;
     if (!getenv("HV_RAM_NO_LEDGER")) {
         uint8_t *free_of_footprint = alloc_no_footprint(ram_size);
-        if (free_of_footprint) b->ram = free_of_footprint;
+        if (free_of_footprint) {
+            b->ram = free_of_footprint;
+            b->ram_mode = 1;
+        }
     }
     if (b->ram == MAP_FAILED && ram_file && *ram_file) {
         int fd = open(ram_file, O_RDWR | O_CREAT | O_TRUNC, 0600);
@@ -272,7 +300,10 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
             unlink(ram_file);
             if (ftruncate(fd, (off_t)ram_size) == 0)
                 b->ram = mmap(NULL, ram_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-            if (b->ram != MAP_FAILED) b->ram_fd = fd; /* the balloon punches holes in it */
+            if (b->ram != MAP_FAILED) {
+                b->ram_fd = fd; /* the balloon punches holes in it */
+                b->ram_mode = 2;
+            }
             else close(fd);
         }
         if (b->ram == MAP_FAILED) fprintf(stderr, "hengevm: guest RAM file %s failed: %s; using anonymous memory\n", ram_file, strerror(errno));
@@ -286,7 +317,10 @@ int hv_vmapple_create(HvVmapple *b, HvMachine *m, HvCpu *cpu, uint64_t ram_size,
             }
         }
     }
-    if (b->ram == MAP_FAILED) b->ram = mmap(NULL, ram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (b->ram == MAP_FAILED) {
+        b->ram = mmap(NULL, ram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (b->ram != MAP_FAILED) b->ram_mode = 3;
+    }
     if (b->ram == MAP_FAILED) return -1;
     b->rom = mmap(NULL, ROM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (b->rom == MAP_FAILED) return -1;

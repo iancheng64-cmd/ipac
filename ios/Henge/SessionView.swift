@@ -22,7 +22,8 @@ struct SessionView: View {
     @State private var thermalState = ProcessInfo.processInfo.thermalState
     @State private var bootRAM: UInt64 = 0 /* what the Mac was started with, which a save is for */
     @State private var bootCPUs: Int = 4
-    @AppStorage("henge.cpus") private var cpus = 4
+    @State private var ramMode: Int32 = 0
+    @State private var runningMac: VirtualMac?
     @AppStorage("henge.matchScreenColors") private var matchScreenColors = true
     @AppStorage("henge.display.brightness") private var screenBrightness = 1.0
     @AppStorage("henge.cursor.scale") private var cursorScale = Device.isPad ? 1 : 3
@@ -177,16 +178,17 @@ struct SessionView: View {
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
         .onChange(of: scenePhase) { phase in
+            let currentMac = runningMac ?? mac
             guard phase != .active else {
                 display.refresh()
-                InstantResume.cameBack(mac)
+                InstantResume.cameBack(currentMac)
                 return
             }
             HardwareKeys.releaseAll()
             HardwareMouse.shared.releaseButtons()
             VolumeClicks.shared.releaseButtons()
             if phase == .inactive { InstantResume.pause() }
-            if phase == .background && bootRAM > 0 { InstantResume.suspend(mac, ramMB: bootRAM, cpus: bootCPUs) }
+            if phase == .background && bootRAM > 0 { InstantResume.suspend(currentMac, ramMB: bootRAM, cpus: bootCPUs) }
         }
         .onChange(of: showDetails) { showing in
             if showing { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
@@ -480,11 +482,24 @@ struct SessionView: View {
         }
     }
 
+    private var ramModeLabel: String {
+        switch ramMode {
+        case 1: return "免計入上限 No Footprint"
+        case 2: return "檔案映射"
+        case 3: return "匿名記憶體"
+        default: return "配置中"
+        }
+    }
+
     private var details: some View {
         NavigationStack {
             List {
                 Section(phase) {
+                    let ramText = bootRAM % 1024 == 0
+                        ? "\(bootRAM / 1024) GB"
+                        : String(format: "%.1f GB", Double(bootRAM) / 1024.0)
                     LabeledContent("儲存位置", value: mac.isExternal ? "外接 SSD（\(mac.externalDriveName ?? "外接硬碟")）" : "此 \(Device.name)")
+                    LabeledContent("記憶體配置", value: bootRAM > 0 ? "\(ramText)（\(ramModeLabel)）" : ramModeLabel)
                     LabeledContent("運行中 CPU", value: "\(cpusOn)／\(bootCPUs)")
                     LabeledContent("裝置溫度", value: Self.thermalLabel(thermalState))
                     LabeledContent("指令轉譯率", value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
@@ -575,6 +590,8 @@ struct SessionView: View {
         state = 0
         userCode = false
         cpusOn = 0
+        bootRAM = 0
+        ramMode = 0
         blocksPerSecond = 0
         framesOut = 0
         framesIn = 0
@@ -588,13 +605,15 @@ struct SessionView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard !Task.isCancelled else { return }
-        if mac.isExternal && !Machines.shared.ensureExternalAccess(for: mac) {
-            error = "外接 SSD（\(mac.externalDriveName ?? "外接硬碟")）未連接，請插上後再試。"
+        let liveMac = Machines.shared.all.first(where: { $0.id == mac.id }) ?? mac
+        runningMac = liveMac
+        if liveMac.isExternal && !Machines.shared.ensureExternalAccess(for: liveMac) {
+            error = "外接 SSD（\(liveMac.externalDriveName ?? "外接硬碟")）未連接，請插上後再試。"
             return
         }
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
-        let ram = GuestMemory.prepare(mac)
+        let ram = GuestMemory.prepare(liveMac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
             error = "此 \(Device.name) 本機可用空間不足，無法配置虛擬 Mac 記憶體（請至少保留數 GB 空間）。"
@@ -604,31 +623,31 @@ struct SessionView: View {
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
         EngineTuning.apply()
-        henge_vm_set_display(UInt32(mac.screen.width), UInt32(mac.screen.height))
-        if mac.isRetina {
+        henge_vm_set_display(UInt32(liveMac.screen.width), UInt32(liveMac.screen.height))
+        if liveMac.isRetina {
             henge_vm_set_display_mm(UInt32(Device.retinaMM.width), UInt32(Device.retinaMM.height))
         } else {
             henge_vm_set_display_mm(0, 0)
         }
-        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
-        if mac.reportHostIdentity == true {
-            let modelID = Device.snappedModelIdentifier(forOS: mac.osName)
+        HengeLog.log("session", "screen \(liveMac.screen.width)x\(liveMac.screen.height) retina \(liveMac.isRetina)")
+        if liveMac.reportHostIdentity == true {
+            let modelID = Device.snappedModelIdentifier(forOS: liveMac.osName)
             henge_vm_set_identity(Device.chipName, Device.marketingName,
-                                  mac.reportHostModelID == true ? modelID : nil)
+                                  liveMac.reportHostModelID == true ? modelID : nil)
             HengeLog.log("session", "About This Mac reports \(Device.marketingName) (model \(modelID))")
         } else {
             henge_vm_set_identity(nil, nil, nil)
         }
-        let activeCPUs = mac.adaptsToHost ? min(max(1, cpus), Device.maxSafeCPUs) : min(max(1, cpus), 6)
-        if activeCPUs != cpus {
-            HengeLog.log("session", "adaptive CPU count: \(activeCPUs) of requested \(cpus) for host")
+        let activeCPUs = liveMac.effectiveCPUs
+        if activeCPUs != liveMac.configuredCPUs {
+            HengeLog.log("session", "adaptive CPU count: \(activeCPUs) of configured \(liveMac.configuredCPUs) for host")
         }
         var rc: Int32 = -1
-        if InstantResume.enabled, let at = InstantResume.saved(for: mac, ramMB: ram, cpus: activeCPUs) {
+        if InstantResume.enabled, let at = InstantResume.saved(for: liveMac, ramMB: ram, cpus: activeCPUs) {
             HengeLog.log("resume", "picking up the Mac saved \(Int(Date().timeIntervalSince(at))) s ago")
             let t0 = Date()
-            rc = henge_vm_resume(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(activeCPUs),
-                                 InstantResume.file(for: mac).path, InstantResume.ident(for: mac, ramMB: ram, cpus: activeCPUs), &buffer, buffer.count)
+            rc = henge_vm_resume(liveMac.rom.path, liveMac.disk.path, liveMac.aux.path, liveMac.ecid, liveMac.seed, ram, Int32(activeCPUs),
+                                 InstantResume.file(for: liveMac).path, InstantResume.ident(for: liveMac, ramMB: ram, cpus: activeCPUs), &buffer, buffer.count)
             if rc == 0 {
                 HengeLog.log("resume", String(format: "resumed in %.1f s", Date().timeIntervalSince(t0)))
             } else {
@@ -636,9 +655,9 @@ struct SessionView: View {
                 buffer = [CChar](repeating: 0, count: 256)
             }
         }
-        InstantResume.discard(for: mac) /* used or out of date: the disk moves on from here */
+        InstantResume.discard(for: liveMac) /* used or out of date: the disk moves on from here */
         if rc != 0 {
-            rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(activeCPUs), &buffer, buffer.count)
+            rc = henge_vm_boot(liveMac.rom.path, liveMac.disk.path, liveMac.aux.path, liveMac.ecid, liveMac.seed, ram, Int32(activeCPUs), &buffer, buffer.count)
         }
         if rc != 0 {
             error = String(cString: buffer)
@@ -646,8 +665,10 @@ struct SessionView: View {
         }
         bootRAM = ram
         bootCPUs = activeCPUs
+        ramMode = henge_vm_ram_mode()
+        HengeLog.log("session", "active RAM \(ram) MB, CPUs \(activeCPUs), backing mode \(ramMode)")
         started = Date()
-        var used = mac
+        var used = liveMac
         used.lastUsed = started
         Machines.shared.update(used)
         var lastBlocks = henge_vm_blocks()

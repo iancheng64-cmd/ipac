@@ -218,7 +218,7 @@ final class Installer: NSObject, ObservableObject {
                 HengeLog.log("install", "boot ROM ready (mode=\(mode.rawValue))")
                 let ipsw = try await download(release)
                 phase = .preparing
-                var mac = try await prepare(name: name, ramMB: ramMB, rom: rom, onExternal: vmOnExternal)
+                var mac = try await prepare(name: name, ramMB: ramMB, cpus: cpus, rom: rom, onExternal: vmOnExternal)
                 mac.osName = release.name
                 made = mac
                 phase = .installing
@@ -337,7 +337,7 @@ final class Installer: NSObject, ObservableObject {
 
     // MARK: The new machine
 
-    private func prepare(name: String, ramMB: Int, rom: URL, onExternal: Bool) async throws -> VirtualMac {
+    private func prepare(name: String, ramMB: Int, cpus: Int, rom: URL, onExternal: Bool) async throws -> VirtualMac {
         // A new machine identity, as VZMacMachineIdentifier makes one: a random ECID.
         let ecid = UInt64.random(in: 1 << 40 ..< 1 << 62)
         var mac = VirtualMac(
@@ -347,7 +347,8 @@ final class Installer: NSObject, ObservableObject {
             ramMB: ramMB,
             diskBytes: 64 << 30,
             reportHostIdentity: true,
-            autoAdaptToHost: onExternal ? true : false
+            autoAdaptToHost: onExternal ? true : false,
+            cpuCount: cpus
         )
         if onExternal {
             guard let bookmark = ExternalInstallStorage.shared.bookmarkData else {

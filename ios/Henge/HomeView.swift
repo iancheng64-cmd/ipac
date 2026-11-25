@@ -32,7 +32,7 @@ struct HomeView: View {
                         MacHero(
                             mac: mac,
                             jitReady: jitReady,
-                            start: { running = mac },
+                            start: { running = machines.all.first(where: { $0.id == mac.id }) ?? mac },
                             turnOnJIT: { jit.enable() },
                             refreshDrive: {
                                 extStorage.refreshConnection()
@@ -232,7 +232,6 @@ private struct MacHero: View {
     let turnOnJIT: () -> Void
     let refreshDrive: () -> Void
     let jitNote: String?
-    @AppStorage("henge.cpus") private var cpus = 4
 
     var body: some View {
         VStack(spacing: 0) {
@@ -260,8 +259,7 @@ private struct MacHero: View {
                     }
                     .padding(.top, 15)
                     .padding(.horizontal, 5)
-                    let shownCPUs = mac.adaptsToHost ? min(max(1, cpus), Device.maxSafeCPUs) : min(max(1, cpus), 6)
-                    Text("\(mac.summary) · \(shownCPUs) 核心")
+                    Text("\(mac.summary) · \(mac.effectiveCPUs) 核心")
                         .font(.system(size: 15))
                         .foregroundStyle(mac.isExternal && !mac.isAvailable ? Desk.bad : Desk.dim)
                         .frame(maxWidth: .infinity, alignment: .leading)

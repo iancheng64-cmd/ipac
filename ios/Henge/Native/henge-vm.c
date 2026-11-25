@@ -501,3 +501,15 @@ uint64_t henge_largest_mapping_mb(void) {
     }
     return 0;
 }
+
+int henge_vm_ram_mode(void) {
+    if (!lock_running()) return 0;
+    HvVmapple *b = hv_vm_board();
+    int mode = b ? b->ram_mode : 0;
+    pthread_rwlock_unlock(&api_lock);
+    return mode;
+}
+
+int henge_vm_can_no_footprint(void) {
+    return hv_vmapple_can_no_footprint();
+}

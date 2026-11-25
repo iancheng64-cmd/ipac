@@ -32,6 +32,15 @@
 
 ## 核心特色
 
+### 內建 GetMoreRam 與單機 RAM／CPU 動態調整（v0.4.0 新增）
+
+- **內建一鍵解鎖 Apple 大記憶體權限（GetMoreRam）**：
+  - 整合 `StosSign` 與 Anisette v3 機制，無需另外安裝獨立 GetMoreRam App，直接於「**設定 › 記憶體配額**」或單機「**設定 › 記憶體**」登入 Apple ID（支援 2FA 與匯入 SideStore 帳號 `.json`），即可為 iPac Bundle ID 開通 Apple `INCREASED_MEMORY_LIMIT` 權限；回到 SideStore／AltStore／Xcode 重新 Refresh 一次即永久套用。
+- **核心免計入上限與分配最佳化（No Footprint）**：
+  - 當 JIT 除錯器附加後，虛擬 Mac 記憶體透過 iOS 核心 `mach_memory_entry_ownership(..., LEDGER_NO_FOOTPRINT)` 直接略過 App 記憶體配額計算；修正了記憶體預留量重複扣除 JIT 快取空間的問題，也不再因 iPad 本機剩餘磁碟空間而限制免計入上限的虛擬記憶體。
+- **關機後隨時調整單機 RAM 與 CPU 核心數**：
+  - 在任何一台 Mac 的「**設定**」頁面（即使是使用外接隨身 SSD 的 Mac），只要處於關機狀態皆可隨時調整 **記憶體容量**（例如從 4 GB 調升為 6 GB，提供快捷按鈕）與 **該台 Mac 專屬的 CPU 核心數（最高 8 核心）**，設定即時儲存，下次開機自動生效並自動清除過時的即時續玩快照以確保新規格正確載入。
+
 ### 外接 USB-C SSD 隨身 macOS
 
 可將整套 macOS 虛擬機裝進一顆外接 USB-C SSD，帶著它插上另一台已安裝 iPac 的 iPad 就能直接開機使用（**無需搬移或複製 64 GB 映像檔到 iPad 本機**）。
@@ -82,7 +91,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
 ## 安裝與下載
 
-直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.3.0-build106.ipa`。
+直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.4.0-build107.ipa`。
 
 ### 系統需求
 
@@ -112,7 +121,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
    - iOS / iPadOS 執行 macOS 模擬器需要透過除錯器啟用 **JIT（動態程式碼執行權限）**；一般企業簽名或僅有 Ad-Hoc Distribution（無 `get-task-allow`）的簽名檔**無法**被 StikDebug 或內建 StikJIT 附加除錯器，開啟 Mac 時會無法啟用 JIT。
    - **解法**：使用開發者 p12 / mobileprovision 憑證，並在 ESign 簽名設定確認保留或注入 `get-task-allow`。
 2. **務必保留 App Extension（`PlugIns/HengeJITHelper.appex`）**：
-   - 在 ESign 匯入並簽名時，**不要勾選「移除所有 PlugIns / Extensions」**，否則「內建 StikJIT 免電腦開啟 JIT」功能會失敗並要求改用外部 StikDebug App（`HengeJITHelper.appex` 已與主程式統一為 Build `106` 確保 ESign/iOS 驗證通過）。
+   - 在 ESign 匯入並簽名時，**不要勾選「移除所有 PlugIns / Extensions」**，否則「內建 StikJIT 免電腦開啟 JIT」功能會失敗並要求改用外部 StikDebug App（`HengeJITHelper.appex` 已與主程式統一為 `v0.4.0` Build `107` 確保 ESign/iOS 驗證通過）。
 3. **關於 Bundle ID 與舊資料覆蓋**：
    - 保持預設 Bundle ID `com.henge.app` 簽名，但若舊版 Henge 原先是由不同 Team ID（例如個人免費簽名 / SideStore）簽署、本次改用不同來源的 ESign 企業或個人憑證，**iOS 不允許不同 Team ID 直接覆蓋同一顆 App**，可能會安裝失敗或需要重新賦予同一個 Bundle ID / 先匯出 Mac 備份後重新安裝。
    - 若打算換新憑證或同時並存安裝：請先把原本的 Mac **「搬移至外接 SSD」** 或用 **「匯出打包」** 保存並移出 `Documents/Exports/`，安裝新簽名版後再從「＋ › 從外接硬碟開啟隨身 Mac…」或匯入資料夾無損載入。
@@ -148,7 +157,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 ios/scripts/fetch_deps.sh
 tools/build_ios_restore.sh
 make ios-lib
-HENGE_IPA_OUT=./iPac-v0.3.0-build106.ipa ios/scripts/package_ipa.sh
+HENGE_IPA_OUT=./iPac-v0.4.0-build107.ipa ios/scripts/package_ipa.sh
 ```
 
 - 若使用免費個人 Apple Team 帳號簽名，建置時可加上 `HENGE_ENTITLEMENTS=Henge/Henge.personal.entitlements`。
@@ -167,6 +176,6 @@ HENGE_IPA_OUT=./iPac-v0.3.0-build106.ipa ios/scripts/package_ipa.sh
 
 ## 授權條款與版權說明
 
-本專案依據 **GNU General Public License v2.0 or later（[GPL-2.0-or-later](LICENSE)）** 開源授權釋出，衍生自 [`Leviidev/Henge`](https://github.com/Leviidev/Henge)。因編譯包含 `usbmuxd` 與來自 `Husk` 的 GPL 程式碼，發行執行檔亦屬 GPL 複合著作，請參閱 [docs/licensing.md](docs/licensing.md)。
+本專案依據 **GNU General Public License v2.0 or later（[GPL-2.0-or-later](LICENSE)）** 開源授權釋出，衍生自 [`Leviidev/Henge`](https://github.com/Leviidev/Henge)。因編譯包含 `usbmuxd` 與來自 `Husk` 的 GPL 程式碼，發行執行檔亦屬 GPL 複合著作，請參閱 [docs/licensing.md](docs/licensing.md)。內建 GetMoreRam 的 Apple Developer Services 驗證與 App ID 更新流程參考 [`hugeBlack/GetMoreRam`](https://github.com/hugeBlack/GetMoreRam) 並採用 [`stossy11/StosSign`](https://github.com/stossy11/StosSign) SwiftPM 套件。
 
 **Apple 版權聲明**：本儲存庫與釋出的 IPA 安裝檔**皆未包含**任何 Apple macOS 作業系統映像檔與開機韌體（`AVPBooter.vmapple2.bin`）；所有系統檔案皆於使用者實際安裝時由裝置直接向 Apple 官方 CDN 下載取得。
