@@ -84,6 +84,8 @@ struct SettingsView: View {
                     Picker(L10n.text("啟用方式"), selection: $jit.method) {
                         ForEach(JITMethod.allCases) { Text(L10n.text($0.title)).tag($0) }
                     }
+                    // Refresh the cached selection label without replacing settings or VM state.
+                    .id(interfaceLanguage)
                     Text(jit.method == .automatic ? L10n.text(jit.automaticDescription) : L10n.format("iPac 將使用「%@」。", L10n.text(jit.method.title)))
                         .font(.footnote).foregroundStyle(.secondary)
                     Button(L10n.text("設定 JIT")) { jit.showSetup = true }

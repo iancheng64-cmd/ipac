@@ -363,3 +363,7 @@ $(B)/test_jit_metadata: tests/test_jit_metadata.c tests/bench_programs.S tests/h
 test-jit-metadata: $(B)/test_jit_metadata
 	$(B)/test_jit_metadata
 .PHONY: test-jit-metadata
+
+test-ios-jit-availability:
+	python3 -B tests/test_ios_jit_availability.py
+.PHONY: test-ios-jit-availability

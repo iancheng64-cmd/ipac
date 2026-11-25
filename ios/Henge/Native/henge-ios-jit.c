@@ -806,7 +806,6 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
     region.rw_addr = (uint8_t *)rw;
     region.rx_addr = (uint8_t *)rx;
     region.size    = bytes;
-    atomic_store(&g_jit_available, true);
 
     HENGE_LOG("#%llu: dual mapping established: rw=%p rx=%p size=%zu diff=%+lld",
              (unsigned long long)n, (void *)region.rw_addr, (void *)region.rx_addr,
@@ -822,6 +821,7 @@ static HengeDualMapping henge_ios_jit_allocate_real(size_t bytes)
         return region;
     }
 
+    atomic_store(&g_jit_available, true);
     return region;
 }
 
