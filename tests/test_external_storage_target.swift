@@ -38,6 +38,8 @@ final class RestoreImageValidation {
 final class Installer {
     static let shared = Installer()
     var busy = false
+    var nativeWorkFinished = true
+    var canCleanStaging: Bool { !busy && nativeWorkFinished }
 }
 
 struct VirtualMac {
@@ -198,6 +200,10 @@ struct ExternalStorageTargetTests {
         storage.cleanupEmptyStagingIfUnused(force: true)
         try check(fm.fileExists(atPath: activeWork.appendingPathComponent("payload").path), "A forced generic cleanup cannot remove a busy install worker's work")
         Installer.shared.busy = false
+        Installer.shared.nativeWorkFinished = false
+        storage.cleanupEmptyStagingIfUnused(force: true)
+        try check(fm.fileExists(atPath: activeWork.path), "Ending the installer UI must not delete a live restore worker's data")
+        Installer.shared.nativeWorkFinished = true
         storage.cleanupEmptyStagingIfUnused(force: true)
         try check(!fm.fileExists(atPath: activeWork.path), "Idle stale work can be cleaned within its captured authorized root")
 

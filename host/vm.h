@@ -60,10 +60,10 @@ void hv_vm_set_poll(void (*poll)(void));
 
 /* Runs CPU 0 on a new thread (unless the caller runs it: cpu0 = 0), the other
    CPUs and the 1 ms kicker. on_exit is called on CPU 0's thread when the
-   machine stops (powered off, a fatal error, or hv_vm_stop), after the disks
-   are flushed; reason is an HV_EXIT_* value. */
+   machine stops (powered off, a fatal error, or hv_vm_stop), after attempting to
+   sync both disks. reason is an HV_EXIT_* value; sync_failed reports either file's failure. */
 /* Returns -1 if a thread could not start; already-started workers are joined. */
-int hv_vm_start(int cpu0, void (*on_exit)(int reason));
+int hv_vm_start(int cpu0, void (*on_exit)(int reason, int sync_failed));
 /* Call on a thread before it runs guest code (hv_vm_start's threads do): see vm.c. */
 void hv_vm_prepare_cpu_thread(void);
 /* That, and the scheduling class the guest's CPUs run at. */
@@ -81,14 +81,14 @@ int hv_vm_pause(void);
 int hv_vm_finish_pause(void);
 int hv_vm_paused(void);
 int hv_vm_continue(void);
-int hv_vm_pause_clean(void); /* paused with no disk request in flight: it can be saved */
+int hv_vm_pause_clean(void); /* paused, no disk request in flight, and both files synced */
 uint64_t hv_vm_paused_counter(void); /* the guest's virtual counter when it paused */
 /* The counter to go on from after a pause or a restore made at wall_ns (CLOCK_REALTIME): see vm.c. */
 uint64_t hv_vm_resume_counter(uint64_t counter, int64_t wall_ns);
 int64_t hv_vm_paused_wall_ns(void);
 /* After a resume (or a long pause): the network link down for 2 s, 1.5 s from now. */
 void hv_vm_link_flap(void);
-void hv_vm_flush_disks(void);
+int hv_vm_flush_disks(void); /* attempts both files, returns -1 if either sync fails */
 /* The disk and auxiliary storage files as they are now (inode, size, last change): a saved machine resumes only onto these. */
 int hv_vm_disk_identity(char *out, size_t n);
 const char *hv_vm_reason_name(int reason);

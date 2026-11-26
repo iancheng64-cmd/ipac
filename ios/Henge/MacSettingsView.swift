@@ -476,9 +476,6 @@ struct MacSettingsView: View {
         guard !removed, machines.deleting == nil, machines.moving == nil else { return }
         if mac.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { mac.name = "Mac" }
         guard let current = machines.all.first(where: { $0.id == mac.id }), current != mac else { return }
-        if current.ramMB != mac.ramMB || current.cpuCount != mac.cpuCount || current.autoAdaptToHost != mac.autoAdaptToHost {
-            InstantResume.discard(for: mac)
-        }
         machines.update(mac)
     }
 }

@@ -19,5 +19,7 @@ void hv_disk_close(HvDisk *d);
 int hv_disk_read(HvDisk *d, uint64_t off, void *buf, uint64_t len);
 int hv_disk_write(HvDisk *d, uint64_t off, const void *buf, uint64_t len);
 int hv_disk_flush(HvDisk *d);
+/* A lifecycle boundary always requests a file sync, regardless of the guest's flush policy. */
+int hv_disk_sync(HvDisk *d);
 
 #endif

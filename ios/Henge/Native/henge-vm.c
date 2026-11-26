@@ -21,6 +21,7 @@
 #include "snapshot.h"
 
 #include <fcntl.h>
+#include <errno.h>
 #include <unistd.h>
 
 HENGE_EXPORT HengeDualMapping *henge_ios_jit_get_mapping(void);
@@ -45,7 +46,7 @@ void henge_vm_set_identity(const char *soc_name, const char *product_name, const
     snprintf(identity_model, sizeof identity_model, "%s", model_id ? model_id : "");
 }
 
-static void on_exit(int reason) {
+static void on_exit(int reason, int sync_failed) {
     pthread_rwlock_wrlock(&api_lock);
     state = 3;
     exit_reason = reason;
@@ -57,6 +58,7 @@ static void on_exit(int reason) {
     case HV_HALT_HOST: exit_outcome = HENGE_VM_OUTCOME_HOST_STOP; break;
     case HV_HALT_PANIC: exit_outcome = HENGE_VM_OUTCOME_PANIC; break;
     }
+    if (sync_failed) exit_outcome = HENGE_VM_OUTCOME_STORAGE_ERROR;
     stopped_blocks = hv_vm_machine()->stats.blocks;
     stopped_tx = hv_net_tx_frames;
     stopped_rx = hv_net_rx_frames;
@@ -64,7 +66,7 @@ static void on_exit(int reason) {
        Normal guest sessions release everything before another boot is allowed. */
     if (!installer_session) hv_vm_destroy();
     state = 2;
-    fprintf(stderr, "henge: the machine stopped (%s, halt reason %d); CPU threads ended, disks flushed%s\n",
+    fprintf(stderr, "henge: the machine stopped (%s, halt reason %d); CPU threads ended%s\n",
             exit_description(), halt, installer_session ? "" : ", machine released");
     pthread_rwlock_unlock(&api_lock);
 }
@@ -94,7 +96,7 @@ static int failed_start(void) {
     return -1;
 }
 
-static int started(char *err, size_t errlen) {
+static int started(char *err, size_t errlen, const char *consumed_snapshot) {
     stopped_blocks = stopped_tx = stopped_rx = 0;
     exit_reason = exit_outcome = 0;
     state = 1;
@@ -102,6 +104,8 @@ static int started(char *err, size_t errlen) {
         snprintf(err, errlen, "There are not enough resources to start the Mac's CPU threads.");
         return failed_start();
     }
+    if (consumed_snapshot && unlink(consumed_snapshot) != 0 && errno != ENOENT)
+        fprintf(stderr, "henge: could not remove the consumed snapshot: %s\n", strerror(errno));
     atomic_fetch_add(&generation, 1);
     pthread_rwlock_unlock(&api_lock);
     return 0;
@@ -206,15 +210,13 @@ static int boot_or_resume(const char *rom, const char *disk, const char *aux, ui
     if (hv_vm_create(&c, err, errlen) != 0) return failed_start();
     if (resume) {
         int restored = hv_snapshot_restore(resume, ident, err, errlen);
-        /* Used once: from here the Mac runs on and its disk moves past what the file holds. */
-        unlink(resume);
         if (restored != 0) {
             fprintf(stderr, "henge: resume failed: %s\n", err);
             return failed_start();
         }
     }
     if (getenv("HV_STATS")) hv_vm_machine()->stats_interval = atoi(getenv("HV_STATS"));
-    return started(err, errlen);
+    return started(err, errlen, resume);
 }
 
 static volatile int install_step = -1;
@@ -252,7 +254,7 @@ int henge_vm_install(const char *rom, const char *disk, const char *aux, uint64_
         snprintf(err, errlen, "The installer could not start.");
         return failed_start();
     }
-    return started(err, errlen);
+    return started(err, errlen, NULL);
 }
 
 int henge_install_step(void) { return install_step; }
@@ -289,6 +291,7 @@ static const char *exit_description(void) {
     case HENGE_VM_OUTCOME_RESTART: return "guest requested a restart";
     case HENGE_VM_OUTCOME_HOST_STOP: return "stopped by host";
     case HENGE_VM_OUTCOME_PANIC: return "guest panic";
+    case HENGE_VM_OUTCOME_STORAGE_ERROR: return "disk sync failed; recent changes may not have been saved";
     default: return hv_vm_reason_name(exit_reason);
     }
 }
@@ -309,11 +312,12 @@ void henge_vm_stop(void) {
     if (state == 4) { /* paused: its CPU threads have ended already, so nothing calls on_exit */
         pthread_rwlock_wrlock(&api_lock);
         if (state == 4) {
+            int sync_failed = hv_vm_flush_disks() != 0;
             hv_vm_destroy();
             exit_reason = HV_EXIT_HALT;
-            exit_outcome = HENGE_VM_OUTCOME_HOST_STOP;
+            exit_outcome = sync_failed ? HENGE_VM_OUTCOME_STORAGE_ERROR : HENGE_VM_OUTCOME_HOST_STOP;
             state = 2;
-            fprintf(stderr, "henge: the paused Mac was stopped and released\n");
+            fprintf(stderr, "henge: the paused Mac was stopped and released (%s)\n", exit_description());
         }
         pthread_rwlock_unlock(&api_lock);
         return;

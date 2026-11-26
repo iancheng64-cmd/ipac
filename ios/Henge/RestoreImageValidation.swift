@@ -31,6 +31,30 @@ final class RestoreImageValidation: @unchecked Sendable {
             MachineStorageSafety.isRegularFile(url, within: root)
     }
 
+    /// Older versions wrote <build>.part. Resume that file in place; new downloads
+    /// use the .ipsw.part name also understood by the staging cleanup.
+    static func partialImage(in directory: URL, build: String) -> URL {
+        let previous = directory.appendingPathComponent("\(build).part")
+        if isManagedFile(previous, in: directory) { return previous }
+        return directory.appendingPathComponent("\(build).ipsw.part")
+    }
+
+    enum RestoreShutdown { case clean, diskError, unconfirmed }
+
+    @MainActor
+    static func finishRestoreShutdown(vmState: () -> Int32, requestStop: () -> Void,
+                                      outcome: () -> RestoreShutdown, maxWaits: Int = 300,
+                                      wait: () async throws -> Void = { try await Task.sleep(nanoseconds: 200_000_000) })
+        async throws -> RestoreShutdown {
+        let state = vmState()
+        if state == 1 || state == 4 { requestStop() }
+        for _ in 0..<maxWaits {
+            if vmState() == 2 { return outcome() }
+            try await wait()
+        }
+        return vmState() == 2 ? outcome() : .unconfirmed
+    }
+
     static func canCleanRestoreWork(step: Int32, vmState: Int32, canStart: Bool) -> Bool {
         (vmState == 0 || vmState == 2) && (canStart || step == 100 || step == 101)
     }

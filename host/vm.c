@@ -4,6 +4,7 @@
 #include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
+#include <errno.h>
 #include <os/lock.h>
 #include <stdatomic.h>
 #include <pthread.h>
@@ -43,7 +44,7 @@ static double boot_last_scan;
 static int net_on;
 static int dt_fixup_on;
 static void (*extra_poll)(void);
-static void (*exit_cb)(int);
+static void (*exit_cb)(int, int);
 static pthread_t secondary_threads[HV_MAX_CPUS], kicker;
 static int secondary_started[HV_MAX_CPUS], kicker_started;
 static _Atomic int kicker_stopped;
@@ -436,9 +437,17 @@ int hv_vm_disk_identity(char *out, size_t n) {
     return 0;
 }
 
-void hv_vm_flush_disks(void) {
-    hv_disk_flush(&disk);
-    hv_disk_flush(&aux);
+int hv_vm_flush_disks(void) {
+    int failed = 0;
+    if (hv_disk_sync(&disk) != 0) {
+        fprintf(stderr, "hengevm: disk image sync failed: %s\n", strerror(errno));
+        failed = 1;
+    }
+    if (hv_disk_sync(&aux) != 0) {
+        fprintf(stderr, "hengevm: auxiliary storage sync failed: %s\n", strerror(errno));
+        failed = 1;
+    }
+    return failed ? -1 : 0;
 }
 
 int hv_vm_run_cpu0(void) {
@@ -480,8 +489,8 @@ int hv_vm_finish_pause(void) {
     int idle = hv_virtio_blk_idle(board.root_blk) && hv_virtio_blk_idle(board.aux_blk);
     hv_dev_unlock(&m);
     if (!idle) fprintf(stderr, "hengevm: pause: disk requests still in flight; it cannot be saved like this\n");
-    pause_clean = idle;
-    hv_vm_flush_disks();
+    int synced = hv_vm_flush_disks() == 0;
+    pause_clean = idle && synced;
     set_pause_state(2);
     return 0;
 }
@@ -581,12 +590,12 @@ static void *cpu0_thread(void *unused) {
     hv_virtio_blk_stop(board.root_blk);
     hv_virtio_blk_stop(board.aux_blk);
     hv_audio_detach();
-    hv_vm_flush_disks();
-    if (exit_cb) exit_cb(r);
+    int sync_failed = hv_vm_flush_disks() != 0;
+    if (exit_cb) exit_cb(r, sync_failed);
     return NULL;
 }
 
-int hv_vm_start(int cpu0, void (*on_exit)(int reason)) {
+int hv_vm_start(int cpu0, void (*on_exit)(int reason, int sync_failed)) {
     exit_cb = on_exit;
     cpu0_ours = cpu0;
     if (atomic_exchange(&nudge_after_start, 0)) /* someone is back: macOS counts the time away as idle (display off) */

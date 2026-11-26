@@ -596,14 +596,21 @@ int hv_snapshot_save(const char *path, const char *ident, char *err, size_t errl
     HvVmapple *b = hv_vm_board();
     int ncpus = hv_vm_ncpus();
     if (!m || !b || !b->ram || ncpus < 1) return fail(err, errlen, "No machine to save.");
-    if (!hv_vm_pause_clean()) return fail(err, errlen, "The machine is not paused, or has disk work in flight.");
+    if (!hv_vm_pause_clean()) return fail(err, errlen, "Cannot save: the machine is not paused, disk work is pending, or disk sync failed.");
     if (b->vusb) return fail(err, errlen, "An installer cannot be saved.");
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     char tmp[1100];
-    snprintf(tmp, sizeof tmp, "%s.part", path);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int length = snprintf(tmp, sizeof tmp, "%s.part", path);
+    if (length < 0 || (size_t)length >= sizeof tmp) return fail(err, errlen, "The snapshot path is too long.");
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return fail(err, errlen, "Cannot write %s: %s", tmp, strerror(errno));
+    /* A previous interrupted save may leave a partial file. Only truncate a private regular file. */
+    struct stat part;
+    if (fstat(fd, &part) != 0 || !S_ISREG(part.st_mode) || part.st_nlink != 1 || ftruncate(fd, 0) != 0) {
+        close(fd);
+        return fail(err, errlen, "Cannot safely replace the partial snapshot.");
+    }
     fcntl(fd, F_NOCACHE, 1);
     W w = {.fd = fd, .cap = 4u << 20};
     w.buf = malloc(w.cap);
@@ -658,7 +665,7 @@ int hv_snapshot_save(const char *path, const char *ident, char *err, size_t errl
 static int read_header(int fd, SnapHeader *h, const char *ident, uint64_t *bytes) {
     struct stat st;
     Trailer t;
-    if (fstat(fd, &st) != 0 || (uint64_t)st.st_size < sizeof *h + sizeof t) return -1;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < (off_t)(sizeof *h + sizeof t)) return -1;
     if (pread(fd, h, sizeof *h, 0) != (ssize_t)sizeof *h || memcmp(h->magic, SNAP_MAGIC, 8) || h->version != SNAP_VERSION ||
         h->header_bytes != sizeof *h || h->fingerprint != fingerprint())
         return -1;
@@ -672,7 +679,7 @@ static int read_header(int fd, SnapHeader *h, const char *ident, uint64_t *bytes
 }
 
 int hv_snapshot_check(const char *path, const char *ident, uint64_t *bytes, int64_t *saved_at) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return -1;
     SnapHeader h;
     int r = read_header(fd, &h, ident, bytes);
@@ -688,7 +695,7 @@ int hv_snapshot_restore(const char *path, const char *ident, char *err, size_t e
     if (!m || !b || !b->ram) return fail(err, errlen, "No machine to restore into.");
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return fail(err, errlen, "No saved Mac: %s", strerror(errno));
     fcntl(fd, F_NOCACHE, 1);
     SnapHeader h;
@@ -699,7 +706,11 @@ int hv_snapshot_restore(const char *path, const char *ident, char *err, size_t e
     }
     char disk_now[256];
     h.disk[sizeof h.disk - 1] = 0;
-    if (hv_vm_disk_identity(disk_now, sizeof disk_now) != 0 || strcmp(disk_now, h.disk)) {
+    if (hv_vm_disk_identity(disk_now, sizeof disk_now) != 0) {
+        close(fd);
+        return fail(err, errlen, "The Mac's disk identity could not be checked.");
+    }
+    if (strcmp(disk_now, h.disk)) {
         close(fd);
         fprintf(stderr, "hengevm: snapshot: the disk changed since the save (%s, now %s)\n", h.disk, disk_now);
         return fail(err, errlen, "The Mac's disk has changed since it was saved.");

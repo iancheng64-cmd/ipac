@@ -1,6 +1,125 @@
 {
   "sourceLanguage" : "zh-Hant",
   "strings" : {
+    "捨棄快照並冷開機" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discard Snapshot and Cold Boot"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捨棄快照並冷開機"
+          }
+        }
+      }
+    },
+    "無法捨棄快照：%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not discard the snapshot: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法捨棄快照：%@"
+          }
+        }
+      }
+    },
+    "虛擬磁碟會保留，但只存在快照中、尚未存檔的進度將無法復原。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The virtual disk will be kept. Unsaved work that exists only in the snapshot cannot be recovered."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "虛擬磁碟會保留，但只存在快照中、尚未存檔的進度將無法復原。"
+          }
+        }
+      }
+    },
+    "無法檢查快照，未啟動虛擬機：%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The virtual Mac did not start because its snapshot could not be checked: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法檢查快照，未啟動虛擬機：%@"
+          }
+        }
+      }
+    },
+    "已關閉「離開時自動保存執行狀態」。快照已保留；重新開啟此設定後即可重試。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic saving on exit is off. The snapshot has been kept. Turn the setting back on to retry."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉「離開時自動保存執行狀態」。快照已保留；重新開啟此設定後即可重試。"
+          }
+        }
+      }
+    },
+    "無法讀取快照，或版本與設定不符。快照已保留；請確認 App 版本、記憶體和 CPU 設定後再試。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The snapshot could not be read or does not match this setup. It has been kept. Check the app version, RAM, and CPU settings, then try again."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取快照，或版本與設定不符。快照已保留；請確認 App 版本、記憶體和 CPU 設定後再試。"
+          }
+        }
+      }
+    },
+    "快照已保留。還原失敗：%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The snapshot was kept. Restore failed: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照已保留。還原失敗：%@"
+          }
+        }
+      }
+    },
     " 或更新版本" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7413,6 +7532,13 @@
         }
       }
     },
+    "已暫停" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Paused" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已暫停" } }
+      }
+    },
     "正在完成關機…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9245,6 +9371,74 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "硬體識別規格"
+          }
+        }
+      }
+    },
+    "最近的更改可能尚未寫入磁碟。重新啟動前，請確認儲存裝置已連線且可以寫入。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recent changes may not have been saved. Before restarting, check that the storage device is connected and writable."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近的更改可能尚未寫入磁碟。重新啟動前，請確認儲存裝置已連線且可以寫入。"
+          }
+        }
+      }
+    },
+    "磁碟同步失敗" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disk sync failed"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磁碟同步失敗"
+          }
+        }
+      }
+    },
+    "還原後磁碟同步失敗。已保留虛擬 Mac 和安裝映像；請確認儲存裝置已連線且可寫入。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disk sync failed after the restore. The virtual Mac and restore image were kept. Check that the storage device is connected and writable."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還原後磁碟同步失敗。已保留虛擬 Mac 和安裝映像；請確認儲存裝置已連線且可寫入。"
+          }
+        }
+      }
+    },
+    "無法確認還原後的磁碟已安全停止。已保留虛擬 Mac 和安裝映像；請保持儲存裝置連線。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The restore finished, but a safe disk shutdown could not be confirmed. The virtual Mac and restore image were kept. Leave the storage device connected."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確認還原後的磁碟已安全停止。已保留虛擬 Mac 和安裝映像；請保持儲存裝置連線。"
           }
         }
       }

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Real native bridge and device workers; only the debugger allocation and
@@ -20,6 +21,7 @@ static HengeDualMapping mapping;
 static int failures;
 static _Atomic int reader_done;
 HengeDualMapping *henge_ios_jit_get_mapping(void) { return &mapping; }
+void henge_ios_release_high_hold(void) {}
 void hv_prof_ios_start(void) {}
 int hv_install_start(HvVirtioUsb *usb, const char *ipsw, const char *work, uint64_t ecid,
                      HvInstallProgress progress, void *user) {
@@ -138,6 +140,35 @@ int main(void) {
         check("no CPU, disk or network worker leak", threads() == initial_threads);
         check("no leaked CPU thread ports", dead_ports() == initial_dead_ports);
     }
+    /* A pipe has valid metadata but cannot be synced. The tiny guest never issues disk requests. */
+    for (int variant = 0; variant < 2; variant++) {
+        char snap[300];
+        snprintf(snap, sizeof snap, "%s/unsafe.hsnap", dir);
+        uint32_t spin = 0x14000000;
+        write_file(rom, &spin, sizeof spin);
+        if (henge_vm_boot(rom, disk, aux, 1, 0, 64, 2, error, sizeof error)) exit(1);
+        HvDisk *target = (variant ? hv_vm_board()->aux_blk : hv_vm_board()->root_blk)->disk;
+        int ends[2];
+        if (pipe(ends) || dup2(ends[0], target->fd) == -1) exit(1);
+        close(ends[0]); close(ends[1]);
+        /* Relaxing guest FLUSH requests must not relax lifecycle persistence checks. */
+        henge_vm_knob("HV_FLUSH", 1);
+        check("sync fault leaves the machine paused", !henge_vm_pause(error, sizeof error) && henge_vm_state() == 4);
+        int rc = henge_vm_save(snap, "flush-test", error, sizeof error);
+        check("sync fault refuses a snapshot and identifies the error", rc != 0 && strstr(error, "sync"));
+        check("sync fault publishes no snapshot", access(snap, F_OK) != 0);
+        unlink(snap);
+        if (!variant) {
+            check("can continue after an unsaved pause", !henge_vm_continue());
+            hv_machine_halt(hv_vm_machine(), HV_HALT_RESET);
+        } else {
+            henge_vm_stop();
+        }
+        for (int n = 0; n < 3000 && henge_vm_state() != 2; n++) usleep(1000);
+        check("terminal sync fault overrides reset or paused host stop", henge_vm_state() == 2 &&
+              henge_vm_exit_outcome() != (variant ? HENGE_VM_OUTCOME_HOST_STOP : HENGE_VM_OUTCOME_RESTART) &&
+              strstr(henge_vm_exit_reason(), "sync"));
+    }
     /* Instant resume: a counter in RAM goes on from where it was saved, in this machine and in a new one. */
     {
         char snap[300];
@@ -151,6 +182,12 @@ int main(void) {
         rc = henge_vm_suspend(snap, "test", error, sizeof error);
         if (rc) fprintf(stderr, "suspend: %s\n", error);
         check("suspend saves", rc == 0 && henge_vm_state() == 4 && access(snap, F_OK) == 0);
+        char partial[310];
+        snprintf(partial, sizeof partial, "%s.part", snap);
+        check("partial test directory created", mkdir(partial, 0700) == 0);
+        check("unexpected partial directory refuses save", henge_vm_save(snap, "test", error, sizeof error) != 0);
+        check("previous snapshot survives a rejected save", henge_vm_saved_ok(snap, "test", NULL, NULL) == 0);
+        check("unexpected partial directory left alone", rmdir(partial) == 0);
         volatile uint64_t *count = (volatile uint64_t *)hv_vm_board()->ram;
         uint64_t c1 = *count;
         usleep(20000);
@@ -168,24 +205,20 @@ int main(void) {
         check("another ident is refused", henge_vm_saved_ok(snap, "other", NULL, NULL) != 0);
         rc = henge_vm_resume(rom, disk, aux, 1, 0, 64, 2, snap, "other", error, sizeof error);
         check("resume with another ident fails and leaves it startable", rc != 0 && henge_vm_can_start());
-        check("a failed resume uses the file up too", access(snap, F_OK) != 0);
-        /* Save again (the failed resume took the file), then resume it properly. */
-        rc = henge_vm_boot(rom, disk, aux, 1, 0, 64, 2, error, sizeof error);
-        usleep(30000);
-        rc |= henge_vm_suspend(snap, "test", error, sizeof error);
-        c2 = *(volatile uint64_t *)hv_vm_board()->ram;
-        henge_vm_stop();
-        rc |= henge_vm_resume(rom, disk, aux, 1, 0, 64, 2, snap, "test", error, sizeof error);
+        check("a refused save remains intact for retry", henge_vm_saved_ok(snap, "test", NULL, NULL) == 0);
+        rc = henge_vm_resume(rom, disk, aux, 1, 0, 64, 2, snap, "test", error, sizeof error);
         if (rc) fprintf(stderr, "resume: %s\n", error);
         check("resume starts the saved Mac", rc == 0 && henge_vm_state() == 1);
         check("the file is used once", access(snap, F_OK) != 0);
-        count = (volatile uint64_t *)hv_vm_board()->ram;
-        check("resumed: the counter is where it was", *count >= c2);
-        for (int n = 0; n < 1000 && *count == c2; n++) usleep(1000);
-        check("resumed: the counter moves on", *count > c2);
-        henge_vm_stop();
-        for (int n = 0; n < 3000 && henge_vm_state() != 2; n++) usleep(1000);
-        check("resumed Mac stops", henge_vm_state() == 2);
+        if (rc == 0) {
+            count = (volatile uint64_t *)hv_vm_board()->ram;
+            check("resumed: the counter is where it was", *count >= c2);
+            for (int n = 0; n < 1000 && *count == c2; n++) usleep(1000);
+            check("resumed: the counter moves on", *count > c2);
+            henge_vm_stop();
+            for (int n = 0; n < 3000 && henge_vm_state() != 2; n++) usleep(1000);
+            check("resumed Mac stops", henge_vm_state() == 2);
+        }
         /* A disk written after the save: the saved Mac must not come back over it. */
         rc = henge_vm_boot(rom, disk, aux, 1, 0, 64, 2, error, sizeof error);
         usleep(30000);
@@ -198,6 +231,7 @@ int main(void) {
         rc = henge_vm_resume(rom, disk, aux, 1, 0, 64, 2, snap, "test", error, sizeof error);
         check("a changed disk refuses the saved Mac", rc != 0 && strstr(error, "disk has changed") != NULL);
         check("refused, it can start from cold", henge_vm_state() == 0 && henge_vm_can_start());
+        check("disk mismatch preserves snapshot for recovery", henge_vm_saved_ok(snap, "test", NULL, NULL) == 0);
         unlink(snap);
     }
     hv_vm_destroy();

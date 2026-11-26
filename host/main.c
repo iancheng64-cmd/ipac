@@ -1037,8 +1037,7 @@ static void *cpu_thread(void *unused) {
             fprintf(stderr, "hengevm: no boot display found\n");
         }
     }
-    hv_vm_flush_disks();
-    exit(0);
+    exit(hv_vm_flush_disks() == 0 ? 0 : 1);
     return NULL;
 }
 

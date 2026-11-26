@@ -51,7 +51,7 @@ const char *henge_vm_exit_reason(void);
    guest shutdown (it also covers reset, host stop and guest panic). */
 enum HengeVmOutcome {
     HENGE_VM_OUTCOME_ERROR, HENGE_VM_OUTCOME_SHUTDOWN, HENGE_VM_OUTCOME_RESTART,
-    HENGE_VM_OUTCOME_HOST_STOP, HENGE_VM_OUTCOME_PANIC
+    HENGE_VM_OUTCOME_HOST_STOP, HENGE_VM_OUTCOME_PANIC, HENGE_VM_OUTCOME_STORAGE_ERROR
 };
 int henge_vm_exit_outcome(void);
 void henge_vm_stop(void);

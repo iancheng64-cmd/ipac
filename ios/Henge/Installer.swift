@@ -75,6 +75,12 @@ final class Installer: NSObject, ObservableObject {
         }
     }
 
+    var canCleanStaging: Bool {
+        !busy && RestoreImageValidation.canCleanRestoreWork(
+            step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
+        )
+    }
+
     static var activeMode: InstallStorageMode {
         ExternalInstallStorage.shared.mode
     }
@@ -124,14 +130,15 @@ final class Installer: NSObject, ObservableObject {
         let directory = imageDirectory
         let target = usingExternalInstallFiles ? ExternalInstallStorage.shared.currentDriveTarget() : nil
         let approvedRoot = target?.rootURL ?? Machines.root
-        for image in [directory.appendingPathComponent("\(r.id).ipsw"), directory.appendingPathComponent("\(r.id).part")] {
+        for image in [directory.appendingPathComponent("\(r.id).ipsw"), directory.appendingPathComponent("\(r.id).ipsw.part"),
+                      directory.appendingPathComponent("\(r.id).part")] {
             guard RestoreImageValidation.isManagedFile(image, in: directory) else { continue }
             _ = try? MachineStorageSafety.removeRegularFile(image, approvedRoot: approvedRoot, validating: target)
         }
         ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused()
     }
     /// Where a download in progress (or stopped partway) is kept.
-    static func partPath(_ r: MacOSRelease) -> URL { imageDirectory.appendingPathComponent("\(r.id).ipsw.part") }
+    static func partPath(_ r: MacOSRelease) -> URL { RestoreImageValidation.partialImage(in: imageDirectory, build: r.id) }
     /// Bytes of a download that stopped partway, or nil.
     static func partSize(_ r: MacOSRelease) -> Int64? {
         let n = RangedDownload.size(of: partPath(r))
@@ -212,6 +219,11 @@ final class Installer: NSObject, ObservableObject {
             var installDriveTarget: ExternalDriveTarget?
             var machineDriveTarget: ExternalDriveTarget?
             var machineApprovedRoot: URL?
+            defer {
+                if let target = installDriveTarget, target == ExternalInstallStorage.shared.currentDriveTarget() {
+                    ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused()
+                }
+            }
             do {
                 try checkSpace(release)
                 mode = Self.activeMode
@@ -242,16 +254,11 @@ final class Installer: NSObject, ObservableObject {
                     _ = try? MachineStorageSafety.removeRegularFile(ipsw, approvedRoot: approvedRoot,
                                                                     validating: installDriveTarget)
                     _ = try? MachineStorageSafety.removeRegularFile(
-                        imageDirectory.appendingPathComponent("\(release.id).part"), approvedRoot: approvedRoot,
+                        RestoreImageValidation.partialImage(in: imageDirectory, build: release.id), approvedRoot: approvedRoot,
                         validating: installDriveTarget
                     )
                 }
                 Self.cleanupSystemTemporaryDownloads()
-                if usedExternalFiles && RestoreImageValidation.canCleanRestoreWork(
-                    step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
-                ) {
-                    ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused(force: true)
-                }
                 HengeLog.log("install", "\(name): installed \(release.name) (mode=\(mode.rawValue))")
                 switch mode {
                 case .internalOnly:
@@ -264,7 +271,7 @@ final class Installer: NSObject, ObservableObject {
             } catch {
                 HengeLog.log("install", "failed: \(error.localizedDescription)")
                 // A half-installed Mac is no use, and its disk can be many gigabytes. The download stays.
-                if let made {
+                if let made, !Machines.shared.all.contains(where: { $0.id == made.id }) {
                     if henge_vm_state() == 1 {
                         henge_vm_stop()
                         for _ in 0..<50 where henge_vm_state() == 3 {
@@ -284,11 +291,6 @@ final class Installer: NSObject, ObservableObject {
                             )
                         }
                     }
-                }
-                if usedExternalFiles && RestoreImageValidation.canCleanRestoreWork(
-                    step: henge_install_step(), vmState: henge_vm_state(), canStart: henge_vm_can_start() != 0
-                ) {
-                    ExternalInstallStorage.shared.cleanupEmptyStagingIfUnused(force: true)
                 }
                 phase = .failed(error.localizedDescription)
             }
@@ -341,7 +343,7 @@ final class Installer: NSObject, ObservableObject {
         phase = .downloading
         // Into a .part file next to where it ends up: an interrupted download (no network, Henge closed or killed)
         // goes on from where it stopped next time, and Install's trash button deletes a partial one too (#58).
-        let part = directory.appendingPathComponent("\(r.id).part")
+        let part = RestoreImageValidation.partialImage(in: directory, build: r.id)
         received = RangedDownload.size(of: part)
         expected = r.bytes
         if received > 0 { HengeLog.log("install", "going on with \(r.name)'s download from \(ByteText.string(UInt64(received)))") }
@@ -524,7 +526,21 @@ final class Installer: NSObject, ObservableObject {
         Machines.writePortableManifest(for: mac, in: mac.directory)
         Machines.shared.add(mac)
         HengeLog.log("install", "\(mac.name): restore finished, added to the Macs")
-        if henge_vm_state() == 1 { henge_vm_stop() }
+        let shutdown = try await RestoreImageValidation.finishRestoreShutdown(vmState: henge_vm_state, requestStop: henge_vm_stop, outcome: {
+            switch henge_vm_exit_outcome() {
+            case Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue), Int32(HENGE_VM_OUTCOME_RESTART.rawValue),
+                 Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue): return .clean
+            case Int32(HENGE_VM_OUTCOME_STORAGE_ERROR.rawValue): return .diskError
+            default: return .unconfirmed
+            }
+        })
+        switch shutdown {
+        case .clean: break
+        case .diskError:
+            throw message(L10n.text("還原後磁碟同步失敗。已保留虛擬 Mac 和安裝映像；請確認儲存裝置已連線且可寫入。"))
+        case .unconfirmed:
+            throw message(L10n.text("無法確認還原後的磁碟已安全停止。已保留虛擬 Mac 和安裝映像；請保持儲存裝置連線。"))
+        }
     }
 
     static func stepName(_ step: Int) -> String {

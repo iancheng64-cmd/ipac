@@ -74,6 +74,13 @@ int hv_disk_write(HvDisk *d, uint64_t off, const void *buf, uint64_t len) {
     return 0;
 }
 
+int hv_disk_sync(HvDisk *d) {
+    if (d->readonly) return 0;
+    int rc;
+    do { rc = fsync(d->fd); } while (rc == -1 && errno == EINTR);
+    return rc;
+}
+
 /* HV_FLUSH: 0 fsync; 1 nothing here, what was written is safe in the host's cache as long as the
    host runs; 2 fcntl(F_BARRIERFSYNC). */
 int hv_disk_flush(HvDisk *d) {
@@ -81,6 +88,6 @@ int hv_disk_flush(HvDisk *d) {
     switch (hv_knob[HV_K_FLUSH]) {
     case 1: return 0;
     case 2: return fcntl(d->fd, F_BARRIERFSYNC) == -1 ? -1 : 0;
-    default: return fsync(d->fd);
+    default: return hv_disk_sync(d);
     }
 }

@@ -935,7 +935,7 @@ final class ExternalInstallStorage: ObservableObject {
     }
 
     func cleanupStaleRestoreDirs(force: Bool = false) {
-        guard !Installer.shared.busy, let root = stagingRoot,
+        guard Installer.shared.canCleanStaging, let root = stagingRoot,
               let approvedRoot = folderURL, let target = currentDriveTarget() else { return }
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
@@ -946,7 +946,7 @@ final class ExternalInstallStorage: ObservableObject {
     }
 
     func cleanupEmptyStagingIfUnused(force: Bool = false) {
-        guard !Installer.shared.busy, let root = stagingRoot,
+        guard Installer.shared.canCleanStaging, let root = stagingRoot,
               let approvedRoot = folderURL, let target = currentDriveTarget() else { return }
         cleanupStaleRestoreDirs(force: force)
         let fm = FileManager.default

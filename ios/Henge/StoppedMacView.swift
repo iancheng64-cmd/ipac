@@ -13,6 +13,7 @@ struct StoppedMacView: View {
         case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue): return L10n.text("Mac 已關機")
         case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return L10n.text("Mac 要求重新開機")
         case Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return L10n.text("Mac 已停止")
+        case Int32(HENGE_VM_OUTCOME_STORAGE_ERROR.rawValue): return L10n.text("磁碟同步失敗")
         default: return L10n.text("Mac 意外停止")
         }
     }
@@ -22,6 +23,8 @@ struct StoppedMacView: View {
         switch outcome {
         case Int32(HENGE_VM_OUTCOME_SHUTDOWN.rawValue), Int32(HENGE_VM_OUTCOME_HOST_STOP.rawValue): return next
         case Int32(HENGE_VM_OUTCOME_RESTART.rawValue): return L10n.text("這台 Mac 已準備好重新開機。")
+        case Int32(HENGE_VM_OUTCOME_STORAGE_ERROR.rawValue):
+            return L10n.text("最近的更改可能尚未寫入磁碟。重新啟動前，請確認儲存裝置已連線且可以寫入。")
         default: return L10n.format("Mac 已停止：%@。", String(describing: reason)) + next
         }
     }

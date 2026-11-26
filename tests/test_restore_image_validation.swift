@@ -5,7 +5,7 @@ func testNativeIPSWValidation(_ path: UnsafePointer<CChar>?, _ build: UnsafePoin
 
 @main
 struct RestoreImageValidationTests {
-    static func main() throws {
+    @MainActor static func main() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("henge-image-cache-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
@@ -52,6 +52,30 @@ struct RestoreImageValidationTests {
         check(!RestoreImageValidation.isManagedFile(userImage, in: managed), "same parent basename does not grant ownership")
         check(!RestoreImageValidation.isManagedFile(link, in: managed), "managed leaf symlink rejected")
         check(fm.fileExists(atPath: userImage.path), "personal source preserved")
+        func partial() -> URL { RestoreImageValidation.partialImage(in: managed, build: "24G90") }
+        check(partial().lastPathComponent == "24G90.ipsw.part", "new transfers use the staging cleanup filename")
+        let previous = managed.appendingPathComponent("24G90.part")
+        try data.write(to: previous)
+        check(partial() == previous && (try? Data(contentsOf: partial())) == data, "preflight and resume see the prior download")
+        try fm.removeItem(at: previous)
+        try fm.createSymbolicLink(at: previous, withDestinationURL: userImage)
+        check(partial().lastPathComponent == "24G90.ipsw.part", "never resume a legacy symlink")
+        var state: Int32 = 1, stops = 0, waits = 0, outcomes = 0
+        let stopped = try await RestoreImageValidation.finishRestoreShutdown(vmState: { state }, requestStop: {
+            stops += 1; state = 3
+        }, outcome: { outcomes += 1; return .diskError }, maxWaits: 3, wait: {
+            waits += 1
+            if waits == 2 { state = 2 }
+        })
+        check(stopped == .diskError && stops == 1 && waits == 2 && outcomes == 1, "restore waits for disk failure after stop")
+        let finished = try await RestoreImageValidation.finishRestoreShutdown(vmState: { 2 }, requestStop: {
+            preconditionFailure("do not stop a finished VM")
+        }, outcome: { .clean }, maxWaits: 1, wait: { preconditionFailure("already stopped") })
+        check(finished == .clean, "already finished clean shutdown can complete")
+        let timedOut = try await RestoreImageValidation.finishRestoreShutdown(vmState: { 3 }, requestStop: {
+            preconditionFailure("do not stop again")
+        }, outcome: { preconditionFailure("no terminal outcome") }, maxWaits: 2, wait: { waits += 1 })
+        check(timedOut == .unconfirmed && waits == 4, "timeout never implies safe shutdown")
         check(RestoreImageValidation.canCleanRestoreWork(step: 100, vmState: 0, canStart: false), "finished restore with idle VM can clean")
         check(RestoreImageValidation.canCleanRestoreWork(step: 100, vmState: 2, canStart: false), "finished restore with stopped VM can clean")
         check(RestoreImageValidation.canCleanRestoreWork(step: 101, vmState: 0, canStart: false), "failed restore with idle VM can clean")

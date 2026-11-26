@@ -52,12 +52,16 @@ rm -rf "$HENGE_ROOT/ios/deps/StikJIT.xcframework"
 ditto "$STIKJIT_ROOT/StikJIT.xcframework" "$HENGE_ROOT/ios/deps/StikJIT.xcframework"
 ./tools/build_ios_restore.sh
 make ios-lib
-mkdir -p "$HOME/Desktop"
 ./ios/scripts/package_ipa.sh
+ipa_path="$(./ios/scripts/package_ipa.sh --print-output)"
+test -s "$ipa_path"
 
 mkdir -p "${BITRISE_DEPLOY_DIR:?Bitrise must set BITRISE_DEPLOY_DIR}"
 # The IPA is intentionally ad-hoc-signed, without embedded.mobileprovision.
 # Bitrise's deploy step treats an .ipa as an installable artifact and rejects it
 # without a provisioning profile. Wrap it so it is uploaded as a generic file;
 # users extract the IPA and let SideStore or AltStore re-sign it.
-( cd "$HOME/Desktop" && zip -0 -q "$BITRISE_DEPLOY_DIR/Henge-color-fix-unsigned.zip" Henge.ipa )
+archive_stage="$(mktemp -d "$BITRISE_DEPLOY_DIR/.ipa-archive.XXXXXX")"
+trap 'rm -r -- "$archive_stage"' EXIT
+zip -0 -q -j "$archive_stage/package.zip" "$ipa_path"
+mv -f "$archive_stage/package.zip" "$BITRISE_DEPLOY_DIR/Henge-color-fix-unsigned.zip"

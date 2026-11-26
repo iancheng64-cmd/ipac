@@ -13,6 +13,8 @@ struct SessionView: View {
     @State private var error: String?
     @State private var state: Int32 = 0
     @State private var bootAttempt = 0
+    @State private var retainedSnapshot = false
+    @State private var confirmDiscard = false
     @State private var cpusOn: Int32 = 0
     @State private var userCode = false
     @State private var blocksPerSecond: Double = 0
@@ -468,6 +470,21 @@ struct SessionView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(L10n.text("這台 Mac 無法啟動")).font(.system(size: 17, weight: .semibold))
             Text(L10n.text(text)).font(.system(size: 14)).foregroundStyle(Desk.dim)
+            if retainedSnapshot {
+                Button(L10n.text("捨棄快照並冷開機"), role: .destructive) { confirmDiscard = true }
+                    .confirmationDialog(L10n.text("捨棄快照並冷開機"), isPresented: $confirmDiscard, titleVisibility: .visible) {
+                        Button(L10n.text("捨棄快照並冷開機"), role: .destructive) {
+                            do {
+                                try InstantResume.discard(for: runningMac ?? mac)
+                                bootAttempt += 1
+                            } catch {
+                                self.error = L10n.format("無法捨棄快照：%@", error.localizedDescription)
+                            }
+                        }
+                    } message: {
+                        Text(L10n.text("虛擬磁碟會保留，但只存在快照中、尚未存檔的進度將無法復原。"))
+                    }
+            }
             Button(L10n.text("關閉")) { close() }.font(.system(size: 15, weight: .semibold)).foregroundStyle(Desk.accentLight)
         }
         .padding(18)
@@ -481,6 +498,7 @@ struct SessionView: View {
         case 0: return error == nil ? L10n.text("正在啟動…") : L10n.text("尚未啟動")
         case 1: return userCode ? L10n.text("macOS 執行中") : L10n.text("正在開機")
         case 3: return L10n.text("正在完成關機…")
+        case 4: return L10n.text("已暫停")
         default: return L10n.format("已停止（%@）", String(describing: String(cString: henge_vm_exit_reason())))
         }
     }
@@ -594,6 +612,8 @@ struct SessionView: View {
 
     private func run() async {
         error = nil
+        retainedSnapshot = false
+        confirmDiscard = false
         state = 0
         userCode = false
         cpusOn = 0
@@ -621,6 +641,7 @@ struct SessionView: View {
         }
         UIApplication.shared.isIdleTimerDisabled = true
         HardwareMouse.shared.start()
+        InstantResume.clearInterruptedWrite(for: liveMac)
         let ram = GuestMemory.prepare(liveMac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
         guard ram >= 1024 else {
@@ -650,8 +671,24 @@ struct SessionView: View {
         if activeCPUs != liveMac.configuredCPUs {
             HengeLog.log("session", "adaptive CPU count: \(activeCPUs) of configured \(liveMac.configuredCPUs) for host")
         }
-        var rc: Int32 = -1
-        if InstantResume.enabled, let at = InstantResume.saved(for: liveMac, ramMB: ram, cpus: activeCPUs) {
+        let hasSnapshot: Bool
+        do { hasSnapshot = try InstantResume.snapshotExists(for: liveMac) }
+        catch {
+            self.error = L10n.format("無法檢查快照，未啟動虛擬機：%@", error.localizedDescription)
+            return
+        }
+        let rc: Int32
+        if hasSnapshot {
+            guard InstantResume.enabled else {
+                retainedSnapshot = true
+                error = L10n.text("已關閉「離開時自動保存執行狀態」。快照已保留；重新開啟此設定後即可重試。")
+                return
+            }
+            guard let at = InstantResume.saved(for: liveMac, ramMB: ram, cpus: activeCPUs) else {
+                retainedSnapshot = true
+                error = L10n.text("無法讀取快照，或版本與設定不符。快照已保留；請確認 App 版本、記憶體和 CPU 設定後再試。")
+                return
+            }
             HengeLog.log("resume", "picking up the Mac saved \(Int(Date().timeIntervalSince(at))) s ago")
             let t0 = Date()
             rc = henge_vm_resume(liveMac.rom.path, liveMac.disk.path, liveMac.aux.path, liveMac.ecid, liveMac.seed, ram, Int32(activeCPUs),
@@ -659,12 +696,13 @@ struct SessionView: View {
             if rc == 0 {
                 HengeLog.log("resume", String(format: "resumed in %.1f s", Date().timeIntervalSince(t0)))
             } else {
-                HengeLog.log("resume", "could not resume (\(String(cString: buffer))); starting it from cold")
-                buffer = [CChar](repeating: 0, count: 256)
+                let reason = String(cString: buffer)
+                HengeLog.log("resume", "could not resume (\(reason)); snapshot retained")
+                retainedSnapshot = true
+                error = L10n.format("快照已保留。還原失敗：%@", reason)
+                return
             }
-        }
-        InstantResume.discard(for: liveMac) /* used or out of date: the disk moves on from here */
-        if rc != 0 {
+        } else {
             rc = henge_vm_boot(liveMac.rom.path, liveMac.disk.path, liveMac.aux.path, liveMac.ecid, liveMac.seed, ram, Int32(activeCPUs), &buffer, buffer.count)
         }
         if rc != 0 {
@@ -712,7 +750,6 @@ struct SessionView: View {
                 StickyKeys.shared.releaseAll()
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
-                InstantResume.discard(for: mac)
                 UIApplication.shared.isIdleTimerDisabled = false
                 HengeLog.log("session", "showing stopped Mac: \(String(cString: henge_vm_exit_reason()))")
                 if henge_vm_exit_outcome() == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {
@@ -741,15 +778,16 @@ struct SessionView: View {
     }
 
     private func stopTapped() {
-        if state == 1 { confirmStop = true } else { close() }
+        switch SessionPowerAction.onTap(nativeState: henge_vm_state(), displayedState: state) {
+        case .confirm: confirmStop = true
+        case .wait: break
+        case .close: close()
+        }
     }
 
     private func finish() {
-        if state == 1 || state == 4 {
-            MacPreview.saveNow(for: mac)
-            henge_vm_stop()
-        }
-        InstantResume.discard(for: mac) /* turned off: nothing to pick up */
-        close()
+        let currentMac = runningMac ?? mac
+        MacPreview.saveNow(for: currentMac)
+        InstantResume.forceStop(currentMac)
     }
 }
