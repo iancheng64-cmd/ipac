@@ -22,6 +22,11 @@ static int init_rest(HvMachine *m);
 static uint64_t next_instance_id;
 
 int hv_knob[HV_K_COUNT];
+static int host_thermal_pressure;
+
+void hv_set_host_thermal_pressure(int high) {
+    __atomic_store_n(&host_thermal_pressure, !!high, __ATOMIC_RELAXED);
+}
 static const char *const hv_knob_names[HV_K_COUNT] = {"HV_NO_RAS", "HV_SUPERBLOCKS", "HV_GROUPS", "HV_WFI_SPIN", "HV_FLUSH", "HV_K1", "HV_K2", "HV_K3", "HV_TLBT", "HV_JIT_CAP", "HV_RECHECK", "HV_SYNC_WAIT", "HV_SWITCH_FLUSH", "HV_RANGE_DROP", "HV_MOVIMM", "HV_PREDSTAT", "HV_WALK_LOG", "HV_HOIST_CHECK", "HV_IJC_PAGES", "HV_DNS_PROXY"};
 
 static void knobs_init(void) {
@@ -255,7 +260,9 @@ void hv_cpu_sync(HvCpu *self, HvCpu *target, uint64_t seq) {
         __atomic_store_n(&s->tlb_live, 0, __ATOMIC_SEQ_CST); /* others need not wait for this one meanwhile */
         ack_wake(s);
     }
-    int sleep = hv_knob[HV_K_SYNCWAIT], probed = !t0, probed_long = !t0;
+    int mode = hv_knob[HV_K_SYNCWAIT];
+    int sleep = mode == 2 ? __atomic_load_n(&host_thermal_pressure, __ATOMIC_RELAXED) : mode;
+    int probed = !t0, probed_long = !t0;
     if (s) __atomic_store_n(&s->phase, HV_PHASE_SYNC, __ATOMIC_RELAXED);
     for (uint32_t spins = 0;; spins++) {
         uint64_t ack = __atomic_load_n(&t->ack_seq, __ATOMIC_ACQUIRE);

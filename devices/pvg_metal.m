@@ -327,12 +327,7 @@ static id<MTLBuffer> buffer_over_mapping(HvReplay *r, HvObject *o) {
 static void refresh_pages(HvReplay *r, uint32_t task, HvObject *o) {
     if (!o->mapped) return;
     uint64_t n = (o->length + 0x3fff) >> 14;
-    uint32_t stack[256];
-    uint32_t *now = n <= 256 ? stack : malloc(n * 4);
-    hv_pvg_lite_task_pages(r->lite, task, o->vpage, n, now);
-    BOOL same = memcmp(now, o->pages, n * 4) == 0;
-    if (now != stack) free(now);
-    if (same) return;
+    if (hv_pvg_lite_pages_match(r->lite, task, o->vpage, n, o->pages)) return;
     uint8_t *old = o->mapped;
     BOOL old_in_buffer = o->mapping_in_buffer;
     if (!map_pages(r, task, o)) return;
@@ -1030,8 +1025,9 @@ static void sync_iosurface(HvObject *s) {
             sync_iosurface(surface);
         }
     }
-    fprintf(stderr, "hengevm: pvg-metal: surface %llu: %llux%llu, row %llu, %llu KB, fourcc %c%c%c%c planes %u\n", mapping, (unsigned long long)sw, (unsigned long long)sh, row, alloc >> 10, desc[7], desc[6], desc[5], desc[4], planes);
-        return surface;
+    if (hv_pvg_trace_on())
+        fprintf(stderr, "hengevm: pvg-metal: surface %llu: %llux%llu, row %llu, %llu KB, fourcc %c%c%c%c planes %u\n", mapping, (unsigned long long)sw, (unsigned long long)sh, row, alloc >> 10, desc[7], desc[6], desc[5], desc[4], planes);
+    return surface;
 }
 
 /* The surface under a mapping id as the guest describes it now. macOS 14's driver reuses ids for new surfaces

@@ -206,6 +206,7 @@ enum PointerLock {
 /// which macOS then accelerates as it would for its own mouse.
 final class HardwareMouse {
     static let shared = HardwareMouse()
+    static let traceInput = ProcessInfo.processInfo.environment["HV_INPUT_LOG"] != nil
     static let speedKey = "henge.mouse.speed"
     static let reverseKey = "henge.mouse.reverse"
     static let scrollSpeedKey = "henge.mouse.scrollSpeed"
@@ -293,7 +294,7 @@ final class HardwareMouse {
 
     private func button(_ physicalButton: Int32, _ pressed: Bool) {
         guard let guestButton = buttons.event(physicalButton, pressed: pressed) else { return }
-        if buttonsLogged < 32 {
+        if Self.traceInput && buttonsLogged < 32 {
             buttonsLogged += 1
             HengeLog.log("input", "physical mouse button: raw=\(physicalButton) guest=\(guestButton) \(pressed ? "down" : "up")")
         }
@@ -323,7 +324,7 @@ final class HardwareMouse {
         let way: Int32 = reverse ? -1 : 1
         let horizontal = way * Self.wheelUnits(horizontalRaw, scale: scale)
         let vertical = way * Self.wheelUnits(verticalRaw, scale: scale)
-        if scrollsLogged < 24 {
+        if Self.traceInput && scrollsLogged < 24 {
             scrollsLogged += 1
             HengeLog.log("input", "scroll raw: \(first), \(second); units: \(horizontal), \(vertical)")
         }

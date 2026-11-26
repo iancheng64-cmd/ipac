@@ -2364,19 +2364,19 @@
         }
       }
     },
-    "優先排程至 Apple M 系列效能核心" : {
+    "提高虛擬 CPU 排程優先級" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Prefer Apple M-series performance cores"
+            "value" : "Raise virtual CPU scheduling priority"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "優先排程至 Apple M 系列效能核心"
+            "value" : "提高虛擬 CPU 排程優先級"
           }
         }
       }
@@ -10310,19 +10310,19 @@
         }
       }
     },
-    "裝置溫度" : {
+    "系統熱狀態" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Device temperature"
+            "value" : "System thermal state"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "裝置溫度"
+            "value" : "系統熱狀態"
           }
         }
       }
@@ -11874,19 +11874,19 @@
         }
       }
     },
-    "過熱 — 已自動降頻" : {
+    "高熱壓力" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hot — Throttled Automatically"
+            "value" : "Serious thermal pressure"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "過熱 — 已自動降頻"
+            "value" : "高熱壓力"
           }
         }
       }

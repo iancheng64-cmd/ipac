@@ -26,11 +26,13 @@ enum { HV_VINPUT_KEYBOARD, HV_VINPUT_MOUSE };
 
 #define HV_VINPUT_RING 4096
 
+typedef struct { uint16_t type, code; int32_t value; } HvInputEvent;
+
 typedef struct HvVirtioInput {
     HvVirtio vio;
     int kind;
     pthread_mutex_t mu;
-    struct { uint16_t type, code; uint32_t value; } ring[HV_VINPUT_RING];
+    HvInputEvent ring[HV_VINPUT_RING];
     uint32_t head, tail; /* under mu */
     uint64_t delivered, dropped;
 } HvVirtioInput;
@@ -38,6 +40,8 @@ typedef struct HvVirtioInput {
 HvVirtioInput *hv_virtio_input_create(HvMachine *m, HvPcie *bus, int kind);
 /* Any thread: queue one event (send HV_EV_SYN, 0, 0 after each group). */
 void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value);
+/* Publish nonempty events and their terminating SYN together, then wake CPU 0 once. */
+void hv_virtio_input_report(HvVirtioInput *d, const HvInputEvent *events, unsigned count);
 /* CPU thread: hand queued events to the guest's buffers. */
 void hv_virtio_input_poll(HvVirtioInput *d);
 

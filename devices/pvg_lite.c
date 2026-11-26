@@ -325,28 +325,46 @@ uint32_t hv_pvg_lite_task_page(HvPvgLite *p, uint32_t task, uint64_t offset) {
     return page;
 }
 
-/* n pages' numbers from a task page on, 0 for those not mapped: a table at a time, for it is asked often. */
-void hv_pvg_lite_task_pages(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, uint32_t *out) {
-    memset(out, 0, n * 4);
-    if (task >= 512 || !p->task_root[task]) return;
-    uint32_t *root = hv_phys_ptr(p->m, (uint64_t)p->task_root[task] << 14, 0x4000);
-    if (!root) return;
-    uint32_t top = root[0], depth = root[1];
-    if (depth < 1 || depth > 3) return;
+/* The two uses of a leaf walk: capture the current mapping, or validate an existing
+   Metal buffer without allocating and filling a temporary copy for every submission. */
+static int task_pages(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, uint32_t *out, const uint32_t *saved) {
+    uint32_t *root = task < 512 && p->task_root[task] ? hv_phys_ptr(p->m, (uint64_t)p->task_root[task] << 14, 0x4000) : NULL;
+    uint32_t depth = root ? root[1] : 0;
+    uint32_t top = depth >= 1 && depth <= 3 ? root[0] : 0;
     for (uint64_t i = 0; i < n;) {
         uint64_t vpn = first + i;
         uint32_t page = top;
-        for (int level = (int)depth - 1; level >= 1 && page; level--) {
+        for (unsigned level = page ? depth - 1 : 0; level && page; level--) {
             uint32_t *t = hv_phys_ptr(p->m, (uint64_t)page << 14, 0x4000);
             page = t ? t[(vpn >> (12 * level)) & 0xfff] & 0x7fffffff : 0;
         }
         uint32_t *leaf = page ? hv_phys_ptr(p->m, (uint64_t)page << 14, 0x4000) : NULL;
         uint64_t in = vpn & 0xfff, run = 4096 - in;
         if (run > n - i) run = n - i;
-        if (leaf)
+        if (saved) {
+            uint32_t diff = 0;
+            if (leaf) {
+                for (uint64_t k = 0; k < run; k++) diff |= leaf[in + k] ^ saved[i + k];
+            } else {
+                for (uint64_t k = 0; k < run; k++) diff |= saved[i + k];
+            }
+            if (diff & 0x7fffffff) return 0; /* bit 31 is a flag, not part of the page number */
+        } else if (leaf) {
             for (uint64_t k = 0; k < run; k++) out[i + k] = leaf[in + k] & 0x7fffffff;
+        } else {
+            memset(out + i, 0, run * sizeof *out);
+        }
         i += run;
     }
+    return 1;
+}
+
+void hv_pvg_lite_task_pages(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, uint32_t *out) {
+    task_pages(p, task, first, n, out, NULL);
+}
+
+int hv_pvg_lite_pages_match(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, const uint32_t *saved) {
+    return task_pages(p, task, first, n, NULL, saved);
 }
 
 uint8_t *hv_pvg_lite_page(HvPvgLite *p, uint32_t guest_page) {

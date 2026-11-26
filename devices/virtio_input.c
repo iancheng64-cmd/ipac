@@ -97,17 +97,27 @@ static void notify(HvVirtio *v, int q) {
     if (any) hv_virtio_interrupt(v);
 }
 
-void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
-    if (!d) return;
-    pthread_mutex_lock(&d->mu);
+static void enqueue(HvVirtioInput *d, HvInputEvent event) {
     if (d->tail - d->head == HV_VINPUT_RING) {
         d->head++; /* full: lose the oldest */
         d->dropped++;
     }
-    uint32_t i = d->tail++ % HV_VINPUT_RING;
-    d->ring[i].type = type;
-    d->ring[i].code = code;
-    d->ring[i].value = (uint32_t)value;
+    d->ring[d->tail++ % HV_VINPUT_RING] = event;
+}
+
+void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
+    if (!d) return;
+    pthread_mutex_lock(&d->mu);
+    enqueue(d, (HvInputEvent){type, code, value});
+    pthread_mutex_unlock(&d->mu);
+    hv_machine_wake(d->vio.m);
+}
+
+void hv_virtio_input_report(HvVirtioInput *d, const HvInputEvent *events, unsigned count) {
+    if (!d || !count) return;
+    pthread_mutex_lock(&d->mu);
+    for (unsigned i = 0; i < count; i++) enqueue(d, events[i]);
+    enqueue(d, (HvInputEvent){HV_EV_SYN, 0, 0});
     pthread_mutex_unlock(&d->mu);
     hv_machine_wake(d->vio.m);
 }

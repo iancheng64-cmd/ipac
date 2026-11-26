@@ -22,7 +22,7 @@ struct SettingsView: View {
     @AppStorage(PhysicalMouseButtons.swapKey) private var swapMouseButtons = false
     @AppStorage(EngineTuning.refreshKey) private var refreshRate = 60
     @AppStorage(EngineTuning.fastFlushKey) private var fastFlush = true
-    @AppStorage(EngineTuning.pCoreQosKey) private var pCoreQos = true
+    @AppStorage(EngineTuning.pCoreQosKey) private var pCoreQos = false
     @AppStorage(EngineTuning.wfiSpinKey) private var wfiSpin = false
     @AppStorage(EngineTuning.superblocksKey) private var superblocks = false
     @AppStorage(EngineTuning.compactJitMetadataKey) private var compactJitMetadata = false
@@ -165,7 +165,7 @@ struct SettingsView: View {
                         Text("120 Hz").tag(120)
                     }
                     .pickerStyle(.segmented)
-                    Toggle(L10n.text("優先排程至 Apple M 系列效能核心"), isOn: $pCoreQos)
+                    Toggle(L10n.text("提高虛擬 CPU 排程優先級"), isOn: $pCoreQos)
                     Toggle(L10n.text("加快虛擬磁碟寫入速度"), isOn: $fastFlush)
                     Toggle(L10n.text("更快從閒置狀態喚醒（微幅增加耗電）"), isOn: $wfiSpin)
                     Toggle(L10n.text("Superblocks 轉譯最佳化（實驗性）"), isOn: $superblocks)

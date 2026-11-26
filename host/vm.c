@@ -690,9 +690,11 @@ static void move_now(void *ctx) {
     if (atomic_load(&input_stopping)) return;
     int64_t packed = (int64_t)(intptr_t)ctx;
     int32_t dx = (int32_t)(packed >> 32), dy = (int32_t)packed;
-    if (dx) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_X, dx);
-    if (dy) hv_virtio_input_send(board.mouse, HV_EV_REL, HV_REL_Y, dy);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    HvInputEvent axes[2];
+    unsigned count = 0;
+    if (dx) axes[count++] = (HvInputEvent){HV_EV_REL, HV_REL_X, dx};
+    if (dy) axes[count++] = (HvInputEvent){HV_EV_REL, HV_REL_Y, dy};
+    hv_virtio_input_report(board.mouse, axes, count);
 }
 
 void hv_vm_mouse_move(int dx, int dy) {
@@ -704,8 +706,7 @@ static void left_update(void) {
     int down = left_user || left_click;
     if (down == left_sent) return;
     left_sent = down;
-    hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_LEFT, down);
-    hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+    hv_virtio_input_report(board.mouse, &(HvInputEvent){HV_EV_KEY, HV_BTN_LEFT, down}, 1);
 }
 
 static void button_now(void *ctx) {
@@ -727,8 +728,7 @@ static void button_now(void *ctx) {
             rctrl_hold(&rctrl_click, 0);
         }
     } else if (button == 2) {
-        hv_virtio_input_send(board.mouse, HV_EV_KEY, HV_BTN_MIDDLE, down);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+        hv_virtio_input_report(board.mouse, &(HvInputEvent){HV_EV_KEY, HV_BTN_MIDDLE, down}, 1);
     }
 }
 
@@ -741,8 +741,7 @@ void hv_vm_mouse_button(int button, int down) {
 static void wheel(uint16_t axis, int amount) {
     while (amount) {
         int piece = amount > 100 ? 100 : amount < -100 ? -100 : amount;
-        hv_virtio_input_send(board.mouse, HV_EV_REL, axis, piece);
-        hv_virtio_input_send(board.mouse, HV_EV_SYN, 0, 0);
+        hv_virtio_input_report(board.mouse, &(HvInputEvent){HV_EV_REL, axis, piece}, 1);
         amount -= piece;
     }
 }

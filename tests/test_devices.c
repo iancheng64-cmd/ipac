@@ -368,6 +368,55 @@ static void test_virtio_blk(HvDisk *aux) {
     check("unknown request UNSUPP", ram(status)[0], 2);
     check("four requests used", used_idx(ring), 4);
     rd8(bar + 0x1000);
+
+    /* Noncontiguous destinations; the trailing byte of the last buffer is status, not disk data. */
+    status = hdr + 0x13000;
+    h[0] = 0;
+    h[2] = 5;
+    memcpy(ram(hdr), h, sizeof h);
+    put_desc(ring, 0, hdr, 16, 1, 1);
+    put_desc(ring, 1, data, 333, 1 | 2, 2);
+    put_desc(ring, 2, status, 1024 - 333 + 1, 2, 0);
+    memset(ram(data), 0xcc, 334);
+    memset(ram(status), 0xcc, 1024 - 333 + 2);
+    offer(ring, 0);
+    wr16(bar + 0x3000, 0);
+    hv_virtio_blk_drain(board.aux_blk);
+    check("scatter read first fragment", memcmp(ram(data), want, 333), 0);
+    check("scatter read second fragment", memcmp(ram(status), want + 333, 1024 - 333), 0);
+    check("scatter read trailing status", ram(status)[1024 - 333], 0);
+    check("scatter read first guard", ram(data)[333], 0xcc);
+    check("scatter read last guard", ram(status)[1024 - 333 + 1], 0xcc);
+
+    h[2] = 0; h[3] = 1u << 23; /* sector * 512 would wrap back to offset zero */
+    memcpy(ram(hdr), h, sizeof h);
+    memset(ram(data), 0xcc, 333);
+    offer(ring, 0);
+    wr16(bar + 0x3000, 0);
+    hv_virtio_blk_drain(board.aux_blk);
+    check("wrapped sector is rejected", ram(status)[1024 - 333], 1);
+    check("invalid read preserves buffer", ram(data)[0], 0xcc);
+
+    /* Simulate a disconnected or truncated backing file after the VM learned its capacity. */
+    check("truncate aux fixture mid-read", ftruncate(aux->fd, (off_t)(aux->offset + 5 * 512 + 401)), 0);
+    h[2] = 5; h[3] = 0;
+    memcpy(ram(hdr), h, sizeof h);
+    memset(ram(status), 0xcc, 1024 - 333 + 1);
+    HvRam *r = hv_ram_lookup(&m, data);
+    uint64_t first_page = (data - r->pa) >> HV_TLB_PAGE_BITS;
+    uint64_t second_page = (status - r->pa) >> HV_TLB_PAGE_BITS;
+    r->code_pages[first_page] = r->code_pages[second_page] = 1;
+    offer(ring, 0);
+    wr16(bar + 0x3000, 0);
+    hv_virtio_blk_drain(board.aux_blk);
+    check("short scatter read fails", ram(status)[1024 - 333], 1);
+    check("short scatter read first fragment", memcmp(ram(data), want, 333), 0);
+    check("short scatter read partial fragment", memcmp(ram(status), want + 333, 401 - 333), 0);
+    check("short scatter read untouched suffix", ram(status)[401 - 333], 0xcc);
+    check("short scatter invalidates first code page", r->code_pages[first_page], 0);
+    check("short scatter invalidates partly filled code page", r->code_pages[second_page], 0);
+    check("restore aux fixture size", ftruncate(aux->fd, (off_t)(aux->offset + aux->size)), 0);
+    rd8(bar + 0x1000);
 }
 
 static uint8_t sent[2048];

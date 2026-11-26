@@ -21,13 +21,38 @@
 #define S_IOERR 1
 #define S_UNSUPP 2
 
-/* Disk I/O straight between the file and the guest's buffers: the
-   segments of one direction, skipping `off` bytes of them, `len` bytes in all.
-   Returns 0, or -1 on a host error or a buffer outside guest RAM. */
-static int seg_io(HvVirtioBlk *b, const HvVirtqElem *e, int writable, uint32_t off, uint64_t disk_off, uint32_t len) {
+/* Each descriptor is a separate guest buffer, but their disk offsets are consecutive. */
+static int seg_read(HvVirtioBlk *b, const HvVirtqElem *e, uint64_t disk_off, uint32_t len) {
+    struct iovec vec[HV_VIRTQ_MAX_SEGS];
+    int count = 0;
+    uint32_t left = len;
+    for (int s = 0; s < e->nseg && left; s++) {
+        const HvVirtqSeg *g = &e->seg[s];
+        if (!g->write || !g->len) continue;
+        uint32_t n = g->len < left ? g->len : left;
+        void *p = hv_phys_ptr(b->vio.m, g->addr, n);
+        if (!p) return -1;
+        vec[count++] = (struct iovec){p, n};
+        left -= n;
+    }
+    if (left) return -1;
+    uint64_t done = hv_disk_readv(b->disk, disk_off, vec, count);
+    /* Even a read ending in an error may have overwritten guest code. */
+    left = (uint32_t)done;
+    for (int s = 0; s < e->nseg && left; s++) {
+        const HvVirtqSeg *g = &e->seg[s];
+        if (!g->write || !g->len) continue;
+        uint32_t n = g->len < left ? g->len : left;
+        hv_dma_written(b->vio.m, g->addr, n);
+        left -= n;
+    }
+    return done == len ? 0 : -1;
+}
+
+static int seg_write(HvVirtioBlk *b, const HvVirtqElem *e, uint32_t off, uint64_t disk_off, uint32_t len) {
     for (int s = 0; s < e->nseg && len; s++) {
         const HvVirtqSeg *g = &e->seg[s];
-        if (g->write != writable) continue;
+        if (g->write) continue;
         if (off >= g->len) {
             off -= g->len;
             continue;
@@ -36,9 +61,7 @@ static int seg_io(HvVirtioBlk *b, const HvVirtqElem *e, int writable, uint32_t o
         if (n > len) n = len;
         void *p = hv_phys_ptr(b->vio.m, g->addr + off, n);
         if (!p) return -1;
-        int r = writable ? hv_disk_read(b->disk, disk_off, p, n) : hv_disk_write(b->disk, disk_off, p, n);
-        if (writable && r == 0) hv_dma_written(b->vio.m, g->addr + off, n);
-        if (r != 0) return -1;
+        if (hv_disk_write(b->disk, disk_off, p, n) != 0) return -1;
         disk_off += n;
         len -= n;
         off = 0;
@@ -64,12 +87,13 @@ static int handle(HvVirtioBlk *b, HvVirtqElem *e, uint32_t *written) {
     uint8_t status = S_OK;
     switch (hdr.type) {
     case T_IN:
-        if (seg_io(b, e, 1, 0, hdr.sector * 512, data) != 0) status = S_IOERR;
+        if (hdr.sector > b->disk->size / 512 || seg_read(b, e, hdr.sector * 512, data) != 0) status = S_IOERR;
         else *written = data;
         break;
     case T_OUT: {
         uint32_t rlen = readable(e);
-        if (rlen < sizeof hdr || seg_io(b, e, 0, sizeof hdr, hdr.sector * 512, rlen - (uint32_t)sizeof hdr) != 0)
+        if (rlen < sizeof hdr || hdr.sector > b->disk->size / 512 ||
+            seg_write(b, e, sizeof hdr, hdr.sector * 512, rlen - (uint32_t)sizeof hdr) != 0)
             status = S_IOERR;
         break;
     }

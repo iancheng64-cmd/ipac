@@ -55,6 +55,7 @@ enum HengeVmOutcome {
 };
 int henge_vm_exit_outcome(void);
 void henge_vm_stop(void);
+void henge_vm_set_host_thermal_pressure(int high);
 /* Testing: sets a translation knob (core/machine.h) in the running machine; nonzero if it exists. */
 int henge_vm_knob(const char *name, int value);
 /* The memory balloon (only with HV_BALLOON set before boot): asks the guest to hand over target_mb (when >= 0)

@@ -346,6 +346,10 @@ uint64_t henge_vm_dns(int which) {
     return which >= 0 && which < 3 ? n[which] : 0;
 }
 
+void henge_vm_set_host_thermal_pressure(int high) {
+    hv_set_host_thermal_pressure(high);
+}
+
 int henge_vm_knob(const char *name, int value) {
     if (!lock_running()) return 0;
     int result = hv_knob_set(hv_vm_machine(), name, value);

@@ -16,8 +16,9 @@ enum EngineTuning {
         // halves the CPU left for apps for animation few will notice.
         "HV_HZ": "60",         // the refresh rate macOS is told its display has
         "HV_WFI_SPIN": "0",    // microseconds an idle CPU watches for work before sleeping
+        "HV_SYNC_WAIT": "2",   // park long inter-CPU waits under serious or critical host heat pressure
         "HV_FLUSH": "2",       // disk flush: F_BARRIERFSYNC, ordered but without a full fsync
-        "HV_QOS": "ui",        // M1 Firestorm P-core scheduling priority (QOS_CLASS_USER_INTERACTIVE)
+        "HV_QOS": "init",      // leave interactive priority to input and presentation by default
         "HV_STATS": "0",       // detailed CPU/MMU profiling adds work per event; opt in via henge-env.txt
     ]
 
@@ -36,7 +37,7 @@ enum EngineTuning {
         if d.bool(forKey: superblocksKey) { env["HV_SUPERBLOCKS"] = "1" } else { unsetenv("HV_SUPERBLOCKS") }
         if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
-        if d.object(forKey: pCoreQosKey) as? Bool == false { env["HV_QOS"] = "init" }
+        if d.bool(forKey: pCoreQosKey) { env["HV_QOS"] = "ui" }
         let docs = documents ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         // GPU command trace: on while Documents/trace-on exists (it is checked every frame, so it can be toggled live).
         env["HV_PVG_TRACE_FILE"] = docs.appendingPathComponent("trace-on").path

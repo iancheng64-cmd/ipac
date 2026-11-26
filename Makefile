@@ -89,6 +89,12 @@ $(B)/test_mmu: tests/test_mmu.c $(ENGINE)
 $(B)/bench_tlbi_fanout: tests/bench_tlbi_fanout.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(B)/bench_sync_pressure: tests/bench_sync_pressure.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(B)/bench_disk_scatter: tests/bench_disk_scatter.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(B)/test_shutdown: tests/test_shutdown.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
@@ -102,6 +108,14 @@ $(B)/test_vm_lifecycle: tests/test_vm_lifecycle.c ios/Henge/Native/henge-vm.c $(
 test-vm-lifecycle: $(B)/test_vm_lifecycle
 	$(B)/test_vm_lifecycle
 .PHONY: test-vm-lifecycle
+
+$(B)/test_input_delivery: tests/test_input_delivery.c $(B)/virtio_input.o $(B)/xhci.o $(B)/virtio.o $(B)/pcie.o $(B)/gicv3.o $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+test-input-delivery: $(B)/test_input_delivery
+	env -u HV_XHCI_LOG $<
+	HV_XHCI_LOG=1 $<
+.PHONY: test-input-delivery
 
 $(B)/test_session_power: ios/Henge/SessionPowerAction.swift tests/test_session_power.swift | $(B)
 	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -parse-as-library $^ -o $@

@@ -41,6 +41,7 @@ void hv_pvg_metal_cursor_moved(HvPvgMetal *m);
 void hv_pvg_metal_set_layer(HvPvgMetal *m, void *layer);
 uint64_t hv_pvg_metal_gpu_frames(HvPvgMetal *m);
 void hv_pvg_lite_task_pages(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, uint32_t *out);
+int hv_pvg_lite_pages_match(HvPvgLite *p, uint32_t task, uint64_t first, uint64_t n, const uint32_t *saved);
 void hv_pvg_lite_set_layer(HvPvgLite *p, void *layer);
 uint64_t hv_pvg_lite_gpu_frames(HvPvgLite *p);
 void hv_pvg_lite_barrier_stats(HvPvgLite *p, uint64_t out[4]);

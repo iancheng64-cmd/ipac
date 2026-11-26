@@ -5,6 +5,7 @@
 #include "pvg_lite.h"
 #include "vmapple.h"
 #include <assert.h>
+#include <mach/mach_time.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -13,6 +14,98 @@
 static HvMachine machine;
 static HvCpu cpus[2];
 static HvVmapple board;
+
+static void write_reg(uint64_t pa, uint32_t v) {
+    assert(!hv_phys_write(&machine, pa, &v, sizeof v));
+}
+
+static void check_task_pages(void) {
+    enum { page = HV_PVG_PAGE_BYTES, count = 4113 };
+    const uint32_t base = VMAPPLE_MEM >> 14, task = 3;
+    uint32_t *ring = hv_phys_ptr(&machine, VMAPPLE_MEM, 4 * page);
+    assert(ring);
+    uint32_t *root = ring + page / 4, *top = root + page / 4, *leaf = top + page / 4;
+    uint32_t cmd[7] = {0x38, sizeof cmd, 1, task * 2, 0, 0, base + 1};
+    memcpy(ring + 0x100 / 4, cmd, sizeof cmd);
+    write_reg(VMAPPLE_GFX + 0x1030, base);
+    write_reg(VMAPPLE_GFX + 0x1004, page);
+    write_reg(VMAPPLE_GFX + 0x1010, 0x100);
+    write_reg(VMAPPLE_GFX + 0x1008, sizeof cmd);
+
+    uint32_t saved[count], first = 13;
+    root[0] = base + 2; root[1] = 2;
+    top[0] = 0x80000000u | (base + 3); top[1] = 0;
+    for (unsigned i = 0; i < 4096; i++) leaf[i] = i % 7 ? (0x80000000u | i) : 0;
+    hv_pvg_lite_task_pages(board.pvg, task, first, count, saved);
+    for (unsigned i = 0; i < count; i++) {
+        uint32_t index = first + i;
+        assert(saved[i] == (index < 4096 && index % 7 ? index : 0));
+    }
+    assert(hv_pvg_lite_pages_match(board.pvg, task, first, count, saved));
+    leaf[first + 1] ^= 0x80000000u;
+    assert(hv_pvg_lite_pages_match(board.pvg, task, first, count, saved));
+    leaf[4095] ^= 1;
+    assert(!hv_pvg_lite_pages_match(board.pvg, task, first, count, saved));
+    leaf[4095] ^= 1;
+    saved[count - 1] = 8;
+    assert(!hv_pvg_lite_pages_match(board.pvg, task, first, count, saved));
+    saved[count - 1] = 0;
+
+    if (getenv("HV_PVG_BENCH_PAGES")) {
+        const unsigned sizes[] = {1, 64, 256, 1253}, reps = 100000;
+        mach_timebase_info_data_t tb; mach_timebase_info(&tb);
+        volatile unsigned checked = 0;
+        for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; s++) for (unsigned round = 0; round < 6; round++) {
+            unsigned n = sizes[s];
+            int direct = round % 2;
+            uint64_t start = mach_absolute_time();
+            for (unsigned i = 0; i < reps; i++) {
+                if (direct) checked += hv_pvg_lite_pages_match(board.pvg, task, first, n, saved);
+                else {
+                    uint32_t stack[256], *copy = n <= 256 ? stack : malloc(n * sizeof *copy);
+                    assert(copy);
+                    hv_pvg_lite_task_pages(board.pvg, task, first, n, copy);
+                    checked += !memcmp(copy, saved, n * sizeof *copy);
+                    if (copy != stack) free(copy);
+                }
+            }
+            double ns = (double)(mach_absolute_time() - start) * tb.numer / tb.denom / reps;
+            printf("GPU page validation: %s %.1f ns/check (%u pages)\n", direct ? "direct" : "temporary", ns, n);
+        }
+        assert(checked == reps * 6 * (sizeof sizes / sizeof sizes[0]));
+    }
+    root[1] = UINT32_MAX;
+    assert(!hv_pvg_lite_pages_match(board.pvg, task, first, count, saved));
+    memset(saved, 0, sizeof saved);
+    assert(hv_pvg_lite_pages_match(board.pvg, task, first, count, saved));
+    assert(hv_pvg_lite_pages_match(board.pvg, 512, first, count, saved));
+    assert(hv_pvg_lite_pages_match(board.pvg, task, first, 0, saved));
+    puts("GPU page validation: flags, holes, changed leaves and invalid tables passed");
+}
+
+/* A real, small scanout surface submitted to the production Metal worker. */
+static void submit_surface(HvPvgMetal *metal) {
+    const uint64_t table = VMAPPLE_MEM + 0x20000, desc = table + 0x4000, list = desc + 0x4000, pixels = list + 0x4000;
+    assert(!hv_phys_write(&machine, VMAPPLE_IOSFC + 0x1010, &table, sizeof table));
+    uint32_t *slot = hv_phys_ptr(&machine, table, 4);
+    uint32_t *ppn = hv_phys_ptr(&machine, list, 4);
+    uint8_t *d = hv_phys_ptr(&machine, desc + 0x400, 0x400), *src = hv_phys_ptr(&machine, pixels, 16384);
+    assert(slot && ppn && d && src);
+    *slot = (uint32_t)(desc >> 12) | 1; *ppn = (uint32_t)(pixels >> 12) | 1;
+    *(uint32_t *)d = (uint32_t)(list >> 12) | 1;
+    *(uint32_t *)(d + 4) = 'BGRA';
+    *(uint64_t *)(d + 0x18) = 16384; *(uint64_t *)(d + 0x20) = 64;
+    *(uint64_t *)(d + 0x28) = 64; *(uint64_t *)(d + 0x30) = 256;
+    d[0x3e] = 1;
+    for (unsigned i = 0; i < 16384; i++) src[i] = (uint8_t)(i * 17 + 5);
+    uint32_t *cmd = calloc(13, sizeof *cmd);
+    cmd[0] = 8; cmd[1] = 13 * sizeof *cmd; cmd[2] = 1; cmd[5] = 1;
+    hv_pvg_metal_submit(metal, board.pvg, 0, cmd, cmd[1]);
+    hv_pvg_metal_quiesce(metal);
+    const uint8_t *frame; uint32_t w, h;
+    assert(hv_pvg_metal_frame(metal, &frame, &w, &h) == 0 && frame && w == 64 && h == 64);
+    assert(!memcmp(src, frame, 16384));
+}
 
 static void check_buffer_aliases(void) {
     enum { page = HV_PVG_PAGE_BYTES, bytes = 6 * page };
@@ -58,6 +151,7 @@ int main(void) {
         hv_vmapple_reset_cpu(&board);
         HvPvgMetal *metal = hv_pvg_metal_create(board.pvg);
         if (!metal) { fprintf(stderr, "Metal replay unavailable; lifecycle test cannot run\n"); return 1; }
+        if (cycle == 0) { check_task_pages(); submit_surface(metal); }
         CAMetalLayer *layer = [CAMetalLayer layer];
         hv_pvg_metal_set_layer(metal, (__bridge void *)layer);
         for (int i = 0; i < 64; i++) {

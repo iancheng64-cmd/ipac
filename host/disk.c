@@ -3,7 +3,7 @@
 #include "../core/machine.h"
 #include "disk.h"
 
-#include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -57,6 +57,37 @@ int hv_disk_read(HvDisk *d, uint64_t off, void *buf, uint64_t len) {
         len -= (uint64_t)n;
     }
     return 0;
+}
+
+uint64_t hv_disk_readv(HvDisk *d, uint64_t off, struct iovec *vec, int count) {
+    if (off > d->size) return 0;
+    uint64_t remaining = d->size - off, done = 0;
+    for (int i = 0; i < count; i++) {
+        if (vec[i].iov_len > remaining) return 0;
+        remaining -= vec[i].iov_len;
+    }
+    while (count > 0) {
+        if (!vec->iov_len) { vec++; count--; continue; }
+        size_t bytes = vec->iov_len < DISK_IO_CHUNK ? vec->iov_len : DISK_IO_CHUNK;
+        int nvec = 1;
+        while (nvec < count && nvec < IOV_MAX && bytes < DISK_IO_CHUNK && vec[nvec].iov_len <= DISK_IO_CHUNK - bytes)
+            bytes += vec[nvec++].iov_len;
+        off_t at = (off_t)(d->offset + off + done);
+        ssize_t n = nvec == 1 ? pread(d->fd, vec->iov_base, bytes, at) : preadv(d->fd, vec, nvec, at);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        done += (size_t)n;
+        size_t moved = (size_t)n;
+        while (count && vec->iov_len <= moved) {
+            moved -= vec->iov_len;
+            vec++; count--;
+        }
+        if (moved) {
+            vec->iov_base = (uint8_t *)vec->iov_base + moved;
+            vec->iov_len -= moved;
+        }
+    }
+    return done;
 }
 
 int hv_disk_write(HvDisk *d, uint64_t off, const void *buf, uint64_t len) {

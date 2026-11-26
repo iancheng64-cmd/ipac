@@ -383,6 +383,8 @@ int hv_ic_ivau_drops(void);
 enum { HV_K_NO_RAS, HV_K_SUPERBLOCKS, HV_K_GROUPS, HV_K_WFI_SPIN, HV_K_FLUSH, HV_K_TEST1, HV_K_TEST2, HV_K_TEST3, HV_K_TLBT, HV_K_JITCAP, HV_K_RECHECK, HV_K_SYNCWAIT, HV_K_SWITCHFLUSH, HV_K_RANGEDROP, HV_K_MOVIMM, HV_K_PREDSTAT, HV_K_WALKLOG, HV_K_HOIST, HV_K_IJCPAGES, HV_K_DNSPROXY, HV_K_COUNT };
 extern int hv_knob[HV_K_COUNT];
 int hv_knob_set(HvMachine *m, const char *name, int value);
+/* HV_SYNC_WAIT=2 parks long acknowledgement waits only under reported host heat pressure. */
+void hv_set_host_thermal_pressure(int high);
 /* Debugging (HV_WATCH): which pages keep losing their translations. */
 extern uint32_t *hv_smc_counts;
 extern uint64_t *hv_smc_last;

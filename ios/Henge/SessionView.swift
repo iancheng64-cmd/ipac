@@ -523,7 +523,7 @@ struct SessionView: View {
                     LabeledContent(L10n.text("記憶體配置"), value: bootRAM > 0 ? "\(ramText)（\(ramModeLabel)）" : ramModeLabel)
                     LabeledContent(L10n.text("要求的記憶體"), value: GuestRAMBudget.text(requestedRAMMB))
                     LabeledContent(L10n.text("運行中 CPU"), value: "\(cpusOn)／\(bootCPUs)")
-                    LabeledContent(L10n.text("裝置溫度"), value: L10n.text(Self.thermalLabel(thermalState)))
+                    LabeledContent(L10n.text("系統熱狀態"), value: L10n.text(Self.thermalLabel(thermalState)))
                     LabeledContent(L10n.text("指令轉譯率"), value: String(format: "%.1f M/s", blocksPerSecond / 1e6))
                     LabeledContent(L10n.text("網路封包"), value: L10n.format("送出 %@，接收 %@", String(describing: framesOut), String(describing: framesIn)))
                     LabeledContent(L10n.text("已運行時間"), value: L10n.format("%@ 秒", String(describing: Int(Date().timeIntervalSince(started)))))
@@ -604,10 +604,17 @@ struct SessionView: View {
         switch state {
         case .nominal: return "正常"
         case .fair: return "微溫"
-        case .serious: return "過熱 — 已自動降頻"
+        case .serious: return "高熱壓力"
         case .critical: return "嚴重過熱"
         @unknown default: return "未知"
         }
+    }
+
+    private func applyHostHeat(_ state: ProcessInfo.ThermalState) {
+        let high = state == .serious || state == .critical
+        henge_vm_set_host_thermal_pressure(high ? 1 : 0)
+        thermalState = state
+        HengeLog.log("session", "thermal state: \(Self.thermalLabel(state))")
     }
 
     private func run() async {
@@ -652,6 +659,7 @@ struct SessionView: View {
         JITBootstrap.releaseLingeringDebugger()
         Sharing.prepare()
         EngineTuning.apply()
+        applyHostHeat(ProcessInfo.processInfo.thermalState)
         henge_vm_set_display(UInt32(liveMac.screen.width), UInt32(liveMac.screen.height))
         if liveMac.isRetina {
             henge_vm_set_display_mm(UInt32(Device.retinaMM.width), UInt32(Device.retinaMM.height))
@@ -730,8 +738,7 @@ struct SessionView: View {
             }
             let heat = ProcessInfo.processInfo.thermalState
             if heat.rawValue != thermalState.rawValue {
-                thermalState = heat
-                HengeLog.log("session", "thermal state: \(Self.thermalLabel(heat))")
+                applyHostHeat(heat)
             }
             if state == 2 {
                 typing = false

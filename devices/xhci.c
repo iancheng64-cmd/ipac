@@ -323,10 +323,7 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
     uint8_t type = setup[0], req = setup[1];
     uint16_t value = (uint16_t)(setup[2] | setup[3] << 8);
     if (xlog()) fprintf(stderr, "xhci: request %02x %02x value %04x len %u\n", type, req, value, setup[6] | setup[7] << 8);
-    /* Every request the trackpad gets goes to the log, unconditionally: the guest's
-       driver handshake is exactly what we are trying to watch. Capped so a polling
-       driver cannot flood it. */
-    if (x->slots[slot].dev == 1 && x->tp_reqs < 80) {
+    if (xlog() && x->slots[slot].dev == 1 && x->tp_reqs < 80) {
         x->tp_reqs++;
         fprintf(stderr, "hengevm: xhci: tp request %02x %02x value %04x index %04x len %u\n",
                 type, req, value, setup[4] | setup[5] << 8, setup[6] | setup[7] << 8);
@@ -462,11 +459,11 @@ static void run_ep0(HvXhci *x, int slot) {
                     rd(x, buf, data, 2); /* the data lives in guest memory, at the TRB's pointer */
                     if (data[0] == 0x02 && (data[1] & 1)) {
                         x->tp_mt = 1; /* the guest switched the pad to multitouch */
-                        fprintf(stderr, "hengevm: xhci: trackpad: multitouch on\n");
+                        if (xlog()) fprintf(stderr, "hengevm: xhci: trackpad: multitouch on\n");
                     } else if (data[0] == 0x01) {
                         tp_select(x, data[1]); /* the guest selected a sensor register to read */
-                        fprintf(stderr, "hengevm: xhci: trackpad: select register %02x (%d bytes)\n", data[1], x->tp_f1_len ? x->tp_f1[3] : 0);
-                    } else {
+                        if (xlog()) fprintf(stderr, "hengevm: xhci: trackpad: select register %02x (%d bytes)\n", data[1], x->tp_f1_len ? x->tp_f1[3] : 0);
+                    } else if (xlog()) {
                         fprintf(stderr, "hengevm: xhci: trackpad: set report %02x %02x\n", data[0], data[1]);
                     }
                 }
@@ -520,8 +517,8 @@ static void run_ep_in(HvXhci *x, int slot) {
             wr(x, buf, rep, n);
             x->tp_rhead++;
             x->tp_delivered++;
-            if (x->tp_delivered <= 16) fprintf(stderr, "hengevm: xhci: trackpad: %u bytes to the guest (delivered %llu)\n", n, (unsigned long long)x->tp_delivered);
-            if (len >= 30 && x->tp_multi_logs < 40) { /* two fingers or more: dump the frame so we can watch them move */
+            if (xlog() && x->tp_delivered <= 16) fprintf(stderr, "hengevm: xhci: trackpad: %u bytes to the guest (delivered %llu)\n", n, (unsigned long long)x->tp_delivered);
+            if (xlog() && len >= 30 && x->tp_multi_logs < 40) {
                 x->tp_multi_logs++;
                 int nf = (int)((len - 12) / 9);
                 fprintf(stderr, "hengevm: xhci: trackpad: %d fingers:", nf);
@@ -916,7 +913,7 @@ static void bar_write(HvPciDev *d, int bar, uint64_t off, uint64_t v, unsigned s
         } else if (slot <= HV_XHCI_SLOTS && x->slots[slot].dev >= 0) {
             int dci = (int)(v & 0xff);
             if (dci < 1 || dci >= HV_XHCI_EPS) return;
-            if (x->slots[slot].dev == 1 && x->tp_db < 8) {
+            if (xlog() && x->slots[slot].dev == 1 && x->tp_db < 8) {
                 x->tp_db++;
                 fprintf(stderr, "hengevm: xhci: trackpad: doorbell dci %d\n", dci);
             }
@@ -1088,7 +1085,7 @@ void hv_xhci_touch(HvXhci *x, int id, int phase, int px, int py, uint32_t ts_ms)
         }
     }
     pthread_mutex_unlock(&x->mu);
-    hv_machine_wake(x->m);
+    if (phase != 1) hv_machine_wake(x->m); /* moves are published by touch_frame */
 }
 
 /* Commit one frame with the current state of all the fingers: a move batch ends

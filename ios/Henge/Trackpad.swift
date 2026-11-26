@@ -91,7 +91,7 @@ struct Trackpad: UIViewRepresentable {
                 fingers.append(Finger(touch: t, id: id))
                 let (x, y) = sensor(t)
                 henge_vm_touch(id, 0, x, y, Self.ms(t.timestamp))
-                if touchesLogged < 12 {
+                if HardwareMouse.traceInput && touchesLogged < 12 {
                     touchesLogged += 1
                     HengeLog.log("input", "trackpad: finger \(id) down at \(x),\(y)")
                 }
