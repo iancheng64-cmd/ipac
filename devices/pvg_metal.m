@@ -43,6 +43,7 @@ static int cursor_scale(void) {
 #include <string.h>
 
 #include "pvg_lite.h"
+#include "pvg_page_runs.h"
 #include "metallib.h"
 
 #if !TARGET_OS_IPHONE
@@ -283,22 +284,28 @@ static BOOL map_pages(HvReplay *r, uint32_t task, HvObject *o) {
     vm_address_t base = 0;
     if (vm_allocate(mach_task_self(), &base, n << 14, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return NO;
     uint32_t *pages = calloc(n, 4);
+    if (!pages) {
+        vm_deallocate(mach_task_self(), base, n << 14);
+        return NO;
+    }
     hv_pvg_lite_task_pages(r->lite, task, o->vpage, n, pages);
+    HvPvgPageRun run = {0};
+    kern_return_t kr = KERN_SUCCESS;
     for (uint64_t i = 0; i < n; i++) {
         uint8_t *src = pages[i] ? hv_pvg_lite_page(r->lite, pages[i]) : NULL;
         if (!src) {
             pages[i] = 0;
             continue;
         }
-        vm_address_t to = base + (i << 14);
-        vm_prot_t cur, max;
-        kern_return_t kr = vm_remap(mach_task_self(), &to, 0x4000, 0, VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)src, FALSE, &cur, &max, VM_INHERIT_NONE);
-        if (kr != KERN_SUCCESS) {
-            fprintf(stderr, "hengevm: pvg-metal: vm_remap failed: %d\n", kr);
-            vm_deallocate(mach_task_self(), base, n << 14);
-            free(pages);
-            return NO;
-        }
+        kr = hv_pvg_queue_page(&run, base + (i << 14), (vm_address_t)src, hv_pvg_remap);
+        if (kr != KERN_SUCCESS) break;
+    }
+    if (kr == KERN_SUCCESS) kr = hv_pvg_flush_run(&run, hv_pvg_remap);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "hengevm: pvg-metal: vm_remap failed: %d\n", kr);
+        vm_deallocate(mach_task_self(), base, n << 14);
+        free(pages);
+        return NO;
     }
     free(o->pages);
     o->pages = pages;
@@ -960,20 +967,26 @@ static void sync_iosurface(HvObject *s) {
     }
     surface->surface_w = (uint32_t)sw, surface->surface_h = (uint32_t)sh;
     uint64_t n = surface->length >> 14;
-    vm_address_t base = 0;
+    vm_address_t mapped_base = 0;
     const uint32_t *pages = (list & 1) ? hv_pvg_lite_phys(lite, (uint64_t)(list & ~1u) << 12, n * 4) : NULL;
-    if (!pages || vm_allocate(mach_task_self(), &base, surface->length, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
+    if (!pages || vm_allocate(mach_task_self(), &mapped_base, surface->length, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
         [self complain:[NSString stringWithFormat:@"surface %llu has no pages", mapping]];
         return nil;
     }
-    surface->mapped = (uint8_t *)base;
+    surface->mapped = (uint8_t *)mapped_base;
+    HvPvgPageRun run = {0};
+    kern_return_t kr = KERN_SUCCESS;
     for (uint64_t i = 0; i < n; i++) {
         if (!(pages[i] & 1)) continue;
         uint8_t *src = hv_pvg_lite_phys(lite, (uint64_t)(pages[i] & ~1u) << 12, 0x4000);
-        if (!src) continue;
-        vm_address_t to = base + (i << 14);
-        vm_prot_t cur, max;
-        vm_remap(mach_task_self(), &to, 0x4000, 0, VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)src, FALSE, &cur, &max, VM_INHERIT_NONE);
+        if (!src) { kr = KERN_INVALID_ADDRESS; break; }
+        kr = hv_pvg_queue_page(&run, mapped_base + (i << 14), (vm_address_t)src, hv_pvg_remap);
+        if (kr != KERN_SUCCESS) break;
+    }
+    if (kr == KERN_SUCCESS) kr = hv_pvg_flush_run(&run, hv_pvg_remap);
+    if (kr != KERN_SUCCESS) {
+        [self complain:[NSString stringWithFormat:@"surface %llu: cannot map guest pages (%d)", mapping, kr]];
+        return nil; /* surface still owns the entire reservation, including any pages already remapped */
     }
     surface->object = [device newBufferWithBytesNoCopy:surface->mapped length:surface->length options:MTLResourceStorageModeShared
                                            deallocator:^(void *at, NSUInteger size) { vm_deallocate(mach_task_self(), (vm_address_t)at, size); }];
@@ -1054,9 +1067,8 @@ static void sync_iosurface(HvObject *s) {
         for (int i = 0; i < 64; i += 4) fprintf(stderr, " %08x", *(uint32_t *)(h.d + i));
         fprintf(stderr, "\n");
     }
-    MTLTextureDescriptor *t = h.tag == 0x39 ? descriptor_v2(h.d) : descriptor_v1(h.d);
-    if (!surface) surface = [self newSurface:h.mapping];
     if (!surface) return;
+    MTLTextureDescriptor *t = h.tag == 0x39 ? descriptor_v2(h.d) : descriptor_v1(h.d);
     t.storageMode = MTLStorageModeShared;
     set_framebuffer_only(t, NO);
     t.usage |= MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;

@@ -587,7 +587,7 @@ struct SessionView: View {
                 }
                 Section(L10n.text("日誌")) {
                     VStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(log.suffix(30).enumerated()), id: \.offset) { _, line in
+                        ForEach(Array(log.enumerated()), id: \.offset) { _, line in
                             Text(line).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                         }
                     }
@@ -718,7 +718,8 @@ struct SessionView: View {
         used.lastUsed = started
         Machines.shared.update(used)
         var lastBlocks = henge_vm_blocks()
-        var lastTime = Date()
+        var lastTime = ProcessInfo.processInfo.systemUptime
+        var lastGPUSample = lastTime
         var lastGPUFrames = henge_vm_gpu_frames()
         var tick = 0
         while !Task.isCancelled {
@@ -727,16 +728,6 @@ struct SessionView: View {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 continue
             }
-            cpusOn = henge_vm_cpus_on()
-            userCode = userCode || henge_vm_guest_el0() != 0
-            let now = Date(), blocks = henge_vm_blocks()
-            blocksPerSecond = Double(blocks &- lastBlocks) / max(now.timeIntervalSince(lastTime), 0.001)
-            lastBlocks = blocks
-            lastTime = now
-            framesOut = henge_vm_net_frames(1)
-            framesIn = henge_vm_net_frames(0)
-            helperRunning = Sharing.helperRunning
-            log = Array(HengeLog.recentLines(200))
             let heat = ProcessInfo.processInfo.thermalState
             if heat.rawValue != thermalState.rawValue {
                 thermalState = heat
@@ -758,13 +749,31 @@ struct SessionView: View {
                 break
             }
             tick += 1
-            if tick % 10 == 0 {
-                let gpuFrames = henge_vm_gpu_frames()
-                HengeLog.log("perf", "blocks/s \(String(format: "%.0f", blocksPerSecond)), GPU frames/10s \(gpuFrames &- lastGPUFrames), "
-                             + "network tx \(framesOut), rx \(framesIn), dns \(henge_vm_dns(0)) answered \(henge_vm_dns(2)) unanswered, "
-                             + "thermal \(Self.thermalLabel(heat))")
-                lastGPUFrames = gpuFrames
-                JITBootstrap.releaseLingeringDebugger()
+            let report = tick % 10 == 0
+            if showDetails || report {
+                let now = ProcessInfo.processInfo.systemUptime, blocks = henge_vm_blocks()
+                let rate = Double(blocks &- lastBlocks) / max(now - lastTime, 0.001)
+                lastBlocks = blocks
+                lastTime = now
+                let tx = henge_vm_net_frames(1), rx = henge_vm_net_frames(0)
+                if showDetails {
+                    cpusOn = henge_vm_cpus_on()
+                    if !userCode { userCode = henge_vm_guest_el0() != 0 }
+                    blocksPerSecond = rate
+                    framesOut = tx
+                    framesIn = rx
+                    helperRunning = Sharing.helperRunning
+                    log = HengeLog.recentLines(30)
+                }
+                if report {
+                    let gpuFrames = henge_vm_gpu_frames()
+                    HengeLog.log("perf", "blocks/s \(String(format: "%.0f", rate)), GPU frame updates \(gpuFrames &- lastGPUFrames) in \(String(format: "%.2f", now - lastGPUSample))s, "
+                                 + "network tx \(tx), rx \(rx), dns \(henge_vm_dns(0)) answered \(henge_vm_dns(2)) unanswered, "
+                                 + "thermal \(Self.thermalLabel(heat))")
+                    lastGPUFrames = gpuFrames
+                    lastGPUSample = now
+                    JITBootstrap.releaseLingeringDebugger()
+                }
             }
             if tick == 60 && !stillWallpaperTipShown { // about when the desktop is up after a login
                 stillWallpaperTipShown = true

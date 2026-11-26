@@ -18,7 +18,7 @@ enum EngineTuning {
         "HV_WFI_SPIN": "0",    // microseconds an idle CPU watches for work before sleeping
         "HV_FLUSH": "2",       // disk flush: F_BARRIERFSYNC, ordered but without a full fsync
         "HV_QOS": "ui",        // M1 Firestorm P-core scheduling priority (QOS_CLASS_USER_INTERACTIVE)
-        "HV_STATS": "10",      // seconds between engine stats lines in the log; 0 = off
+        "HV_STATS": "0",       // detailed CPU/MMU profiling adds work per event; opt in via henge-env.txt
     ]
 
     static func apply(defaults d: UserDefaults = .standard, documents: URL? = nil) {

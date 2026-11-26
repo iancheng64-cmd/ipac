@@ -41,10 +41,17 @@ static unsigned benchmark_count(const char *text, unsigned limit) {
     return (unsigned)count;
 }
 
+/* Match the iOS bridge so an otherwise identical workload can compare profiling on/off. */
+static void apply_stats_interval(HvMachine *m) {
+    const char *seconds = getenv("HV_STATS");
+    if (seconds && strcmp(seconds, "0")) m->stats_interval = (int)benchmark_count(seconds, 86400);
+}
+
 static int batch_benchmark(unsigned rounds, unsigned executions, const char *selected) {
     static HvMachine m;
     static HvCpu initial, native, jit;
     if (hv_machine_init(&m, 4 << 20) != 0) return 1;
+    apply_stats_interval(&m);
     m.chain = 1;
     uint8_t *stack = aligned_alloc(PAGE_BYTES, 65536);
     if (!stack || hv_machine_add_ram(&m, (uint64_t)(uintptr_t)bench_programs_begin,
@@ -100,6 +107,7 @@ static int churn_benchmark(unsigned rounds, unsigned cycles, unsigned batches) {
     static HvCpu cpu;
     Fixture f;
     if (fixture_init(&f, &m, &cpu, 8, 16 << 20, NULL) != 0) return 1;
+    apply_stats_interval(&m);
     for (unsigned r = 0; r < rounds; r++) {
         double elapsed = 0;
         uint64_t translations = 0, chains = 0, invalidations = 0;

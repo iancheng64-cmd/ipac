@@ -35,6 +35,7 @@ struct EngineTuningTests {
         expect(environment("HV_RAM_TEST_SENTINEL") == "over-physical-memory",
                "Metadata settings preserve unrelated environment entries")
         expect(environment("HV_HZ") == "60", "Unchanged refresh defaults")
+        expect(environment("HV_STATS") == "0", "Interactive sessions do not profile hot CPU paths by default")
 
         preferences.set(true, forKey: EngineTuning.compactJitMetadataKey)
         EngineTuning.apply(defaults: preferences, documents: documents)
@@ -44,15 +45,18 @@ struct EngineTuningTests {
         expect(environment("HV_COMPACT_JIT_METADATA") == "0", "Disabling clears a previous enable")
 
         preferences.set(true, forKey: EngineTuning.compactJitMetadataKey)
-        try "HV_COMPACT_JIT_METADATA=0\n".write(
-            to: documents.appendingPathComponent("henge-env.txt"), atomically: true, encoding: .utf8
-        )
+        let envFile = documents.appendingPathComponent("henge-env.txt")
+        try "HV_COMPACT_JIT_METADATA=0\nHV_STATS=10\n".write(to: envFile, atomically: true, encoding: .utf8)
         EngineTuning.apply(defaults: preferences, documents: documents)
         expect(environment("HV_COMPACT_JIT_METADATA") == "0", "Existing explicit env overrides still win")
         expect(preferences.bool(forKey: EngineTuning.compactJitMetadataKey),
                "Overrides do not rewrite the saved preference")
         expect(environment("HV_RAM_TEST_SENTINEL") == "over-physical-memory",
                "Enabling also preserves unrelated environment entries")
+        expect(environment("HV_STATS") == "10", "Diagnostic sessions can explicitly enable hot-path profiling")
+        try FileManager.default.removeItem(at: envFile)
+        EngineTuning.apply(defaults: preferences, documents: documents)
+        expect(environment("HV_STATS") == "0", "Removing the diagnostic override disables profiling on the next boot")
 
         print("Engine tuning: \(checks) checks passed")
     }
