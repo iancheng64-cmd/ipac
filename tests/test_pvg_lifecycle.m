@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include "pvg_page_runs.h"
+#include "pvg_command_copy.h"
 #include "pvg_lite.h"
 #include "vmapple.h"
 #include <assert.h>
@@ -83,6 +84,67 @@ static void check_task_pages(void) {
     puts("GPU page validation: flags, holes, changed leaves and invalid tables passed");
 }
 
+static void check_command_copies(HvPvgMetal *metal) {
+    enum { page = HV_PVG_PAGE_BYTES, task = 3, sections = 4, blen = 40 };
+    const uint32_t base = VMAPPLE_MEM >> 14;
+    uint32_t *root = hv_phys_ptr(&machine, VMAPPLE_MEM + page, page);
+    uint32_t *leaf = hv_phys_ptr(&machine, VMAPPLE_MEM + 2 * page, page);
+    root[0] = base + 2; root[1] = 1;
+    memset(leaf, 0, page);
+    for (uint32_t i = 1; i <= 6; i++) leaf[i] = base + 30 + 2 * i;
+    uint32_t *objects = hv_phys_ptr(&machine, (uint64_t)leaf[1] << 14, page);
+    uint32_t *description = hv_phys_ptr(&machine, (uint64_t)leaf[2] << 14, page);
+    uint8_t *left = hv_phys_ptr(&machine, (uint64_t)leaf[3] << 14, page);
+    uint8_t *right = hv_phys_ptr(&machine, (uint64_t)leaf[4] << 14, page);
+    uint8_t *output = hv_phys_ptr(&machine, (uint64_t)leaf[6] << 14, page);
+    /* A real buffer object for the older guest's object table at offset 0x4000. */
+    objects[3] = 16u << 8 | 1; objects[4] = 2 * page; objects[5] = 0;
+    description[0] = page; description[1] = 0; description[2] = 6; description[3] = 0;
+    uint32_t *cmd = calloc(6 + 4 * sections, sizeof *cmd);
+    cmd[0] = 0x43; cmd[1] = (6 + 4 * sections) * sizeof *cmd; cmd[2] = 37;
+    cmd[3] = task; cmd[5] = sections;
+    for (unsigned i = 0; i < sections; i++) {
+        uint32_t data[10] = {32, 2, 306, 32, 1, i * 256, 0, 256, 0, 0x30 + i};
+        unsigned off = 4 * page - 16 + i * 64;
+        if (!i) { memcpy(left + page - 16, data, 16); memcpy(right, (uint8_t *)data + 16, blen - 16); }
+        else memcpy(right + off - 4 * page, data, blen);
+        /* One unreadable segment between good ones must not replay stale cached bytes. */
+        cmd[6 + i * 4] = i == 2 ? 7 * page : off;
+        cmd[8 + i * 4] = blen;
+    }
+    hv_pvg_metal_submit(metal, board.pvg, 1, cmd, cmd[1]);
+    hv_pvg_metal_quiesce(metal);
+    uint32_t *stamps = hv_phys_ptr(&machine, VMAPPLE_MEM, 8);
+    assert(stamps[1] == 37);
+    for (unsigned i = 0; i < sections * 256; i++)
+        assert(output[i] == (i / 256 == 2 ? 0 : 0x30 + i / 256));
+
+    NSMutableData *cache = nil;
+    NSMutableData *small = hv_pvg_command_storage(&cache, 512);
+    assert(small == cache && cache.length == 4096);
+    assert(hv_pvg_command_storage(&cache, 64) == small);
+    assert(hv_pvg_command_storage(&cache, HV_COMMAND_CACHE_LIMIT) != small);
+    assert(hv_pvg_command_storage(&cache, HV_COMMAND_CACHE_LIMIT + 1) != cache);
+    assert(cache.length == HV_COMMAND_CACHE_LIMIT);
+    if (getenv("HV_PVG_BENCH_COMMANDS")) {
+        const unsigned sizes[] = {512, 4096, 16384}, reps = 10000;
+        mach_timebase_info_data_t tb; mach_timebase_info(&tb);
+        for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; s++) for (int j = 0; j < 6; j++) {
+            unsigned sum = 0, n = sizes[s];
+            uint64_t start = mach_absolute_time();
+            for (unsigned i = 0; i < reps; i++) @autoreleasepool {
+                NSMutableData *bytes = j % 2 ? hv_pvg_command_storage(&cache, n) : [NSMutableData dataWithLength:n];
+                assert(!hv_pvg_lite_task_read(board.pvg, task, 4 * page, bytes.mutableBytes, n));
+                sum += ((const uint8_t *)bytes.bytes)[48];
+            }
+            assert(sum == right[48] * reps);
+            printf("Metal command snapshot: %s %u bytes %.1f ns\n", j % 2 ? "reused" : "fresh", n,
+                   (double)(mach_absolute_time() - start) * tb.numer / tb.denom / reps);
+        }
+    }
+    puts("Metal command snapshots: fragmented input, GPU fill bytes, unreadable segment and cache limit passed");
+}
+
 /* A real, small scanout surface submitted to the production Metal worker. */
 static void submit_surface(HvPvgMetal *metal) {
     const uint64_t table = VMAPPLE_MEM + 0x20000, desc = table + 0x4000, list = desc + 0x4000, pixels = list + 0x4000;
@@ -151,7 +213,7 @@ int main(void) {
         hv_vmapple_reset_cpu(&board);
         HvPvgMetal *metal = hv_pvg_metal_create(board.pvg);
         if (!metal) { fprintf(stderr, "Metal replay unavailable; lifecycle test cannot run\n"); return 1; }
-        if (cycle == 0) { check_task_pages(); submit_surface(metal); }
+        if (cycle == 0) { check_task_pages(); submit_surface(metal); check_command_copies(metal); }
         CAMetalLayer *layer = [CAMetalLayer layer];
         hv_pvg_metal_set_layer(metal, (__bridge void *)layer);
         for (int i = 0; i < 64; i++) {

@@ -50,7 +50,10 @@ static int seg_read(HvVirtioBlk *b, const HvVirtqElem *e, uint64_t disk_off, uin
 }
 
 static int seg_write(HvVirtioBlk *b, const HvVirtqElem *e, uint32_t off, uint64_t disk_off, uint32_t len) {
-    for (int s = 0; s < e->nseg && len; s++) {
+    struct iovec vec[HV_VIRTQ_MAX_SEGS];
+    uint32_t left = len;
+    int count = 0;
+    for (int s = 0; s < e->nseg && left; s++) {
         const HvVirtqSeg *g = &e->seg[s];
         if (g->write) continue;
         if (off >= g->len) {
@@ -58,19 +61,21 @@ static int seg_write(HvVirtioBlk *b, const HvVirtqElem *e, uint32_t off, uint64_
             continue;
         }
         uint32_t n = g->len - off;
-        if (n > len) n = len;
+        if (n > left) n = left;
+        if (g->addr > UINT64_MAX - off) return -1;
         void *p = hv_phys_ptr(b->vio.m, g->addr + off, n);
         if (!p) return -1;
-        if (hv_disk_write(b->disk, disk_off, p, n) != 0) return -1;
-        disk_off += n;
-        len -= n;
+        vec[count++] = (struct iovec){p, n};
+        left -= n;
         off = 0;
     }
-    return len ? -1 : 0;
+    if (left) return -1;
+    if (count == 1) return hv_disk_write(b->disk, disk_off, vec[0].iov_base, len);
+    return hv_disk_writev(b->disk, disk_off, vec, count) == len ? 0 : -1;
 }
 
-static uint32_t readable(const HvVirtqElem *e) {
-    uint32_t n = 0;
+static uint64_t readable(const HvVirtqElem *e) {
+    uint64_t n = 0;
     for (int s = 0; s < e->nseg; s++)
         if (!e->seg[s].write) n += e->seg[s].len;
     return n;
@@ -91,9 +96,9 @@ static int handle(HvVirtioBlk *b, HvVirtqElem *e, uint32_t *written) {
         else *written = data;
         break;
     case T_OUT: {
-        uint32_t rlen = readable(e);
-        if (rlen < sizeof hdr || hdr.sector > b->disk->size / 512 ||
-            seg_write(b, e, sizeof hdr, hdr.sector * 512, rlen - (uint32_t)sizeof hdr) != 0)
+        uint64_t rlen = readable(e);
+        if (rlen < sizeof hdr || rlen - sizeof hdr > UINT32_MAX || hdr.sector > b->disk->size / 512 ||
+            seg_write(b, e, sizeof hdr, hdr.sector * 512, (uint32_t)(rlen - sizeof hdr)) != 0)
             status = S_IOERR;
         break;
     }

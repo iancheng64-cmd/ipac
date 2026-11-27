@@ -56,6 +56,8 @@ void hv_ijc_drop_asid(HvCpu *cpu, uint16_t asid);
 /* TTBR0 changed: use the new address space's user entries. */
 void hv_ijc_switch(HvCpu *cpu);
 void hv_tlb_flush_va_asid(HvCpu *cpu, uint64_t va, int asid); /* asid -1: every address space */
+/* A decoded architected small range, up to 256 host TLB pages in length. */
+void hv_tlb_flush_small_range(HvCpu *cpu, uint64_t va, uint64_t len, int asid);
 void hv_tlb_flush_va_page(HvCpu *cpu, uint64_t va, int asid);
 int hv_tlb_check_all(HvCpu *cpu); /* one page: stashes lose only its entries */
 void hv_ijc_drop_va(HvCpu *cpu, uint64_t va, int asid);

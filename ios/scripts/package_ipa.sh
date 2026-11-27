@@ -109,7 +109,12 @@ if [[ "${OUT:h}" == "$RELEASE_DIR" ]]; then
         printf '# iPac v%s (Build %s)\n\nSource commit: `%s`.\n\nNo version-specific change notes were available at packaging time. Consult the GitHub release and source history for verified changes.\n' \
             "$VERSION" "$BUILD" "$(git -C "$IOS/.." rev-parse --short=12 HEAD 2>/dev/null || echo unknown)" > "$STAGE/README.md"
     fi
+    for script in measure_system.sh measure_app_window.sh; do
+        cp "$IOS/../tools/$script" "$STAGE/$script"
+    done
 fi
 mv -f "$STAGE/package.tmp" "$OUT" # atomic: a half-written IPA never sits where the good one was
-[ -f "$STAGE/README.md" ] && mv -f "$STAGE/README.md" "$RELEASE_DIR/README.md"
+if [ -f "$STAGE/README.md" ]; then
+    mv -f "$STAGE/README.md" "$STAGE/measure_system.sh" "$STAGE/measure_app_window.sh" "$RELEASE_DIR/"
+fi
 echo "==> $OUT ($(du -h "$OUT" | cut -f1))"

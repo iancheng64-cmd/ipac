@@ -44,6 +44,7 @@ static int cursor_scale(void) {
 
 #include "pvg_lite.h"
 #include "pvg_page_runs.h"
+#include "pvg_command_copy.h"
 #include "metallib.h"
 
 #if !TARGET_OS_IPHONE
@@ -149,6 +150,7 @@ enum { OBJ_BUFFER = 1, OBJ_TEXTURE = 2, OBJ_FUNCTION = 6, OBJ_SERIALIZED = 7, OB
     _Atomic int stopping;
     dispatch_group_t completions;
     id<MTLCommandBuffer> last_cb;
+    NSMutableData *command_cache; /* serial worker only */
     double encode_time, gpu_wait_time;
     BOOL pipeline_set; /* in the open encoder */
     BOOL tess_factors; /* so is a tessellation factor buffer */
@@ -2141,7 +2143,8 @@ typedef struct {
         memcpy(&off, bufs + b * 16, 8);
         memcpy(&blen, bufs + b * 16 + 8, 8);
         if (blen > (64u << 20) || blen < 8) continue;
-        NSMutableData *copy = [NSMutableData dataWithLength:(NSUInteger)blen];
+        __attribute__((objc_precise_lifetime)) NSMutableData *copy = hv_pvg_command_storage(&command_cache, (NSUInteger)blen);
+        if (!copy) { [self complain:@"command buffer storage unavailable"]; continue; }
         if (hv_pvg_lite_task_read(lite, task, off, copy.mutableBytes, (uint32_t)blen)) { [self complain:@"command buffer unreadable"]; continue; }
         const uint8_t *p = copy.bytes, *end = p + blen;
         uint32_t seglen, info;
@@ -2750,6 +2753,7 @@ void hv_pvg_metal_destroy(HvPvgMetal *m) {
             r->screen_tex = nil;
             r->cursor_tex = nil;
             r->last_cb = nil;
+            r->command_cache = nil;
             r->readback = r->test_readback = nil;
             free(r->frame); r->frame = NULL;
             free(r->base); r->base = NULL;

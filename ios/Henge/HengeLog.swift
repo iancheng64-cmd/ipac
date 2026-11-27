@@ -46,8 +46,8 @@ enum HengeLog {
 
     /// Recent lines, for the in-app viewer. Bounded so a long session cannot grow
     /// without limit.
-    private static let ringLimit = 4000
-    private static var ring: [String] = []
+    private static var nativeTail: NativeLogTail?
+    private static var ring = RecentLogLines(capacity: 4000)
     private static let ringLock = NSLock()
 
     static var logFileURL: URL {
@@ -57,7 +57,7 @@ enum HengeLog {
 
     static func recentLines(_ n: Int = 400) -> [String] {
         ringLock.lock(); defer { ringLock.unlock() }
-        return Array(ring.suffix(n))
+        return ring.suffix(n)
     }
 
     // MARK: - Startup
@@ -97,12 +97,7 @@ enum HengeLog {
     /// could retrieve. Replaying it here puts it in henge.log, which is the file
     /// people already know how to send.
     private static func replayPreviousNativeLog() {
-        guard let data = try? Data(contentsOf: previousNativeLogURL),
-              !data.isEmpty,
-              let text = String(data: data.suffix(8 * 1024), encoding: .utf8)
-        else { return }
-
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).suffix(40)
+        let lines = NativeLogTail.previousLines(at: previousNativeLogURL)
         guard !lines.isEmpty else { return }
         log("prev", "---- last \(lines.count) lines from the previous run "
                   + "(the one that may have crashed) ----")
@@ -169,38 +164,9 @@ enum HengeLog {
         dup2(pipeWriteFD, STDOUT_FILENO)
         dup2(pipeWriteFD, STDERR_FILENO)
 
-        let t = Thread {
-            var pending = Data()
-            var buf = [UInt8](repeating: 0, count: 16 * 1024)
-            while true {
-                let n = read(pipeReadFD, &buf, buf.count)
-                if n < 0 {
-                    if errno == EINTR { continue }
-                    break
-                }
-                // End of file, not end of stream: the writer is still open and
-                // more will arrive. A pipe blocked here; a file returns 0, so
-                // this is where the tail waits.
-                if n == 0 {
-                    usleep(40_000)
-                    continue
-                }
-                pending.append(contentsOf: buf[0..<n])
-
-                // Emit complete lines only, so a partial write never splits a
-                // message across two log entries.
-                while let nl = pending.firstIndex(of: 0x0A) {
-                    let lineData = pending.subdata(in: pending.startIndex..<nl)
-                    pending.removeSubrange(pending.startIndex...nl)
-                    if let line = String(data: lineData, encoding: .utf8) {
-                        emit(line, fromStream: true)
-                    }
-                }
-            }
+        nativeTail = NativeLogTail(fd: pipeReadFD) { line in
+            emit(line, fromStream: true)
         }
-        t.name = "com.henge.log.reader"
-        t.qualityOfService = .userInitiated
-        t.start()
     }
 
     /// Turn "the app vanished with no crash log" into a labelled last line.
@@ -289,7 +255,6 @@ enum HengeLog {
     private static func emit(_ line: String, fromStream: Bool) {
         ringLock.lock()
         ring.append(line)
-        if ring.count > ringLimit { ring.removeFirst(ring.count - ringLimit) }
         ringLock.unlock()
 
         // The C side (henge-ios-jit.c, henge-display.c) writes to os_log itself as

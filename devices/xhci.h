@@ -86,6 +86,8 @@ typedef struct HvXhci {
 } HvXhci;
 
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus);
+/* Validate the saved input payload before publishing it to the live controller. */
+int hv_xhci_input_state_valid(const HvXhci *x);
 /* Any thread: a key went down or up (HID usage page 7 usage, e.g. 4 = A; 0xe0-0xe7 are modifiers). */
 void hv_xhci_key(HvXhci *x, uint8_t usage, int down);
 /* The same, by Linux input key code (what the host UI produces). */

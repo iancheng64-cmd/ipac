@@ -482,15 +482,33 @@ void hv_ijc_drop_va(HvCpu *cpu, uint64_t va, int asid) {
 
 static void stash_drop_va(HvPerCpu *p, uint64_t va, int asid);
 
-void hv_tlb_flush_va_asid(HvCpu *cpu, uint64_t va, int asid) {
+static void flush_page_slots(HvCpu *cpu, uint64_t va, int asid) {
     /* Tagged addresses may sit in any slot's tag byte, so check by the low 56 bits. */
     uint32_t idx = (va >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1);
     hv_ijc_drop_va(cpu, va, asid);
-    if (!((va >> 55) & 1)) hv_tlb_stash_drop(cpu, asid);
     for (int el = 0; el < 3; el++) {
         HvTlbEntry *e = hv_tlb_ent(cpu, idx, el);
         memset(e, 0x80, sizeof *e);
     }
+}
+
+void hv_tlb_flush_va_asid(HvCpu *cpu, uint64_t va, int asid) {
+    if (!((va >> 55) & 1)) hv_tlb_stash_drop(cpu, asid);
+    flush_page_slots(cpu, va, asid);
+}
+
+void hv_tlb_flush_small_range(HvCpu *cpu, uint64_t va, uint64_t len, int asid) {
+    if (!len) return;
+    uint64_t first = va & ~(uint64_t)PAGE_MASK;
+    /* Only this CPU saves/restores its stashes. One generation change per
+       range makes the same stashes stale as one per page. Remote invalidations
+       still use their own walk-sequence checks; live slots remain per-page. */
+    if (!((va >> 55) & 1)) hv_tlb_stash_drop(cpu, asid);
+    uint64_t pages = ((va & PAGE_MASK) + len + PAGE_MASK) >> HV_TLB_PAGE_BITS;
+    uint64_t until_top = ((UINT64_MAX - first) >> HV_TLB_PAGE_BITS) + 1;
+    if (pages > until_top) pages = until_top; /* kernel ranges ending at 2^64 must not wrap into user VAs */
+    for (uint64_t i = 0; i < pages; i++)
+        flush_page_slots(cpu, first + (i << HV_TLB_PAGE_BITS), asid);
 }
 
 /* One page (a TLBI by VA): as hv_tlb_flush_va_asid, but in the stashes only that page's entries go,

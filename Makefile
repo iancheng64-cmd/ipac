@@ -89,6 +89,9 @@ $(B)/test_mmu: tests/test_mmu.c $(ENGINE)
 $(B)/bench_tlbi_fanout: tests/bench_tlbi_fanout.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(B)/bench_tlbi_range: tests/bench_tlbi_range.c $(ENGINE)
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(B)/bench_sync_pressure: tests/bench_sync_pressure.c $(ENGINE)
 	$(CC) $(CFLAGS) $^ -o $@
 
@@ -376,6 +379,27 @@ $(B)/test_engine_tuning: ios/Henge/EngineTuning.swift tests/test_engine_tuning.s
 test-engine-tuning: $(B)/test_engine_tuning
 	$(B)/test_engine_tuning
 .PHONY: test-engine-tuning
+
+$(B)/test_native_log_tail: ios/Henge/NativeLogTail.swift tests/test_native_log_tail.swift | $(B)
+	xcrun --sdk macosx swiftc -O -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-native-log: $(B)/test_native_log_tail
+	$<
+.PHONY: test-native-log
+
+$(B)/test_physical_mouse_buttons: ios/Henge/PhysicalMouseButtons.swift tests/test_physical_mouse_buttons.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@
+
+test-physical-mouse: $(B)/test_physical_mouse_buttons
+	$<
+.PHONY: test-physical-mouse
+
+$(B)/test_boot_frame_capture: ios/Henge/BootFrameCapture.swift tests/test_boot_frame_capture.swift ios/Henge/Native/henge-vm.h | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -import-objc-header ios/Henge/Native/henge-vm.h $(filter %.swift,$^) -o $@
+
+test-boot-frame: $(B)/test_boot_frame_capture
+	$<
+.PHONY: test-boot-frame
 
 $(B)/test_app_language_ui: ios/Henge/AppLanguage.swift ios/Henge/AppLanguageScope.swift tests/test_app_language_ui.swift | $(B)
 	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors $^ -o $@

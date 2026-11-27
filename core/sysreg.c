@@ -369,9 +369,7 @@ void hv_tlbi_apply(HvCpu *cpu, uint32_t op1, uint32_t crn, uint32_t crm, uint32_
                 hv_ijc_drop_range(cpu, va, len, all_asids ? -1 : (int)(xt >> 48));
             }
         } else {
-            uint64_t first = va & ~((1ull << HV_TLB_PAGE_BITS) - 1);
-            for (uint64_t p = first; p < va + len; p += 1ull << HV_TLB_PAGE_BITS)
-                hv_tlb_flush_va_asid(cpu, p, all_asids ? -1 : (int)(xt >> 48));
+            hv_tlb_flush_small_range(cpu, va, len, all_asids ? -1 : (int)(xt >> 48));
         }
         return;
     }

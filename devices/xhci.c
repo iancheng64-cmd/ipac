@@ -948,7 +948,10 @@ void hv_xhci_key(HvXhci *x, uint8_t usage, int down) {
             s[7] = 0;
         }
     }
-    if (x->rtail - x->rhead < HV_XHCI_REPORTS) memcpy(x->reports[x->rtail++ % HV_XHCI_REPORTS], s, 8);
+    /* Boot reports describe the entire keyboard. Under prolonged backpressure
+       retain the oldest pending history, but never leave a key held forever. */
+    uint32_t at = x->rtail - x->rhead < HV_XHCI_REPORTS ? x->rtail++ : x->rtail - 1;
+    memcpy(x->reports[at % HV_XHCI_REPORTS], s, 8);
     pthread_mutex_unlock(&x->mu);
     hv_machine_wake(x->m);
 }
@@ -979,6 +982,16 @@ void hv_xhci_key_linux(HvXhci *x, uint16_t code, int down) {
 }
 
 /* ---- the Magic Trackpad 2's reports ---- */
+
+int hv_xhci_input_state_valid(const HvXhci *x) {
+    if (x->rtail - x->rhead > HV_XHCI_REPORTS || x->tp_rtail - x->tp_rhead > HV_TP_REPORTS ||
+        x->tp_f1_len < 0 || (size_t)x->tp_f1_len > sizeof x->tp_f1) return 0;
+    for (uint32_t i = x->tp_rhead; i != x->tp_rtail; i++) {
+        unsigned len = x->tp_rlen[i % HV_TP_REPORTS];
+        if (len < 12 || len > HV_TP_REPORT_LEN || (len - 12) % 9 != 0) return 0;
+    }
+    return 1;
+}
 
 /* Build the current report into out: a 12-byte prefix (report ID 2, the press,
    flags, the timestamp) plus nine bytes a finger. The finger's x and y are 13
@@ -1029,6 +1042,83 @@ static uint32_t tp_now_ms(void) {
     return (uint32_t)((uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000);
 }
 
+/* Equal only for consecutive samples in the same contact/button phase.
+   Coordinates and sample time may differ; stop, contact, IDs and buttons must not. */
+static int tp_same_contacts(const HvXhci *x, uint32_t a, uint32_t b) {
+    a %= HV_TP_REPORTS;
+    b %= HV_TP_REPORTS;
+    const uint8_t *pa = x->tp_reports[a], *pb = x->tp_reports[b];
+    unsigned len = x->tp_rlen[a];
+    if (len != x->tp_rlen[b] || pa[1] != pb[1]) return 0;
+    for (unsigned f = 12; f < len; f += 9)
+        if (pa[f+8] != pb[f+8] || ((pa[f+3] ^ pb[f+3]) & 0xfc)) return 0;
+    return 1;
+}
+
+static void tp_copy_report(HvXhci *x, uint32_t dst, uint32_t src) {
+    if (dst == src) return;
+    dst %= HV_TP_REPORTS;
+    src %= HV_TP_REPORTS;
+    uint8_t len = x->tp_rlen[src];
+    memcpy(x->tp_reports[dst], x->tp_reports[src], len);
+    x->tp_rlen[dst] = len;
+}
+
+static uint32_t tp_wire_ms(const uint8_t *r) {
+    return (r[9] >> 3) | ((uint32_t)r[10] << 5) | ((uint32_t)r[11] << 13);
+}
+
+static int tp_axis(const uint8_t *f, int y) {
+    int n = y ? (f[1] >> 5) | (f[2] << 3) | ((f[3] & 3) << 11) : f[0] | ((f[1] & 31) << 8);
+    return n & 4096 ? n - 8192 : n;
+}
+
+/* Only discard an exact interpolation of both neighbors, in every finger and axis.
+   This keeps reversals, corners, and changes in speed even within one long contact. */
+static int tp_linear(const HvXhci *x, uint32_t i) {
+    const uint8_t *a = x->tp_reports[(i-1) % HV_TP_REPORTS];
+    const uint8_t *b = x->tp_reports[i % HV_TP_REPORTS];
+    const uint8_t *c = x->tp_reports[(i+1) % HV_TP_REPORTS];
+    int64_t ab = (tp_wire_ms(b) - tp_wire_ms(a)) & 0x1fffff, bc = (tp_wire_ms(c) - tp_wire_ms(b)) & 0x1fffff;
+    if (!ab || !bc) return 0;
+    for (unsigned f = 12; f < x->tp_rlen[i % HV_TP_REPORTS]; f += 9)
+        for (int y = 0; y < 2; y++) {
+            int p = tp_axis(a + f, y), q = tp_axis(b + f, y), r = tp_axis(c + f, y);
+            if ((q - p) * bc != (r - q) * ab) return 0;
+        }
+    return 1;
+}
+
+/* Called only after the guest fell an entire queue behind. Each report contains
+   absolute positions, so an exactly interpolable sample is redundant. Keep a run's
+   first sample and its last two (velocity), including their original timestamps. */
+static void tp_make_room(HvXhci *x) {
+    uint32_t first = x->tp_rhead, end = x->tp_rtail, put = first;
+    while (first != end) {
+        uint32_t next = first + 1;
+        while (next != end && tp_same_contacts(x, first, next)) next++;
+        uint32_t len = next - first;
+        tp_copy_report(x, put++, first);
+        for (uint32_t k = 1; k + 2 < len; k++)
+            if (!tp_linear(x, first + k)) tp_copy_report(x, put++, first + k);
+        if (len >= 3) tp_copy_report(x, put++, next - 2);
+        if (len >= 2) tp_copy_report(x, put++, next - 1);
+        first = next;
+    }
+    x->tp_rtail = put;
+    /* Even after 64 mostly distinct state edges, release must reach the guest.
+       Prefer sacrificing an interior sample before losing an old phase. */
+    if (put - x->tp_rhead == HV_TP_REPORTS) {
+        for (uint32_t i = x->tp_rhead + 1; i != put - 1; i++)
+            if (tp_same_contacts(x, i - 1, i) && tp_same_contacts(x, i, i + 1)) {
+                for (; i != put - 1; i++) tp_copy_report(x, i, i + 1);
+                x->tp_rtail--;
+                return;
+            }
+        x->tp_rhead++;
+    }
+}
+
 /* Queue the current state as a report, stamped with the touch sample's clock (ms);
    ts_ms 0 falls back to the current time (the physical button). */
 static void tp_queue(HvXhci *x, uint32_t ts_ms) {
@@ -1038,12 +1128,10 @@ static void tp_queue(HvXhci *x, uint32_t ts_ms) {
     uint32_t now = ts_ms ? ts_ms : tp_now_ms();
     x->tp_ts = now > x->tp_ts ? now : x->tp_ts + 1;
     int len = tp_build_report(x, r);
-    if (x->tp_rtail - x->tp_rhead < HV_TP_REPORTS) {
-        unsigned at = x->tp_rtail % HV_TP_REPORTS;
-        memcpy(x->tp_reports[at], r, (size_t)len);
-        x->tp_rlen[at] = (uint8_t)len;
-        x->tp_rtail++;
-    }
+    if (x->tp_rtail - x->tp_rhead == HV_TP_REPORTS) tp_make_room(x);
+    unsigned at = x->tp_rtail++ % HV_TP_REPORTS;
+    memcpy(x->tp_reports[at], r, (size_t)len);
+    x->tp_rlen[at] = (uint8_t)len;
 }
 
 static struct HvTpFinger *tp_new_finger(HvXhci *x) {

@@ -62,26 +62,16 @@ struct BootDisplay: View {
                         gpuLive = true
                         image = nil
                     }
-                    if !gpuLive { image = Self.snapshot() ?? image }
+                    if !gpuLive && state == 1, let frame = await BootFrameCapture.frame(for: generation),
+                       !Task.isCancelled, henge_vm_generation() == generation, henge_vm_state() == 1 {
+                        image = frame
+                    }
                 }
                 try? await Task.sleep(nanoseconds: gpuLive ? 250_000_000 : 100_000_000)
             }
         }
     }
 
-    static func snapshot() -> CGImage? {
-        var px: UnsafePointer<UInt8>?
-        var w: Int32 = 0, h: Int32 = 0, stride: Int32 = 0
-        guard henge_vm_boot_display(&px, &w, &h, &stride) == 0, let px else { return nil }
-        defer { henge_vm_free_display(px) }
-        let bytes = Int(stride) * Int(h)
-        let data = Data(bytes: px, count: bytes) // a copy: the guest keeps drawing
-        guard let provider = CGDataProvider(data: data as CFData) else { return nil }
-        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
-        return CGImage(width: Int(w), height: Int(h), bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(stride),
-                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: info, provider: provider, decode: nil,
-                       shouldInterpolate: true, intent: .defaultIntent)
-    }
 }
 
 /// A layer the engine draws the Mac's frames into, with the GPU, without the main thread.

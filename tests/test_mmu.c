@@ -63,6 +63,45 @@ static void expect(const char *what, HvCpu *cpu, uint64_t va, HvAccess acc, int 
     }
 }
 
+static void check_local_range(HvCpu *cpu, uint64_t va, int granule, unsigned scale,
+                              unsigned num, unsigned op2, int kernel) {
+    const uint64_t mask = (1ull << HV_TLB_PAGE_BITS) - 1;
+    uint64_t first = va & ~mask;
+    uint64_t size = (uint64_t)(num + 1) << (5 * scale + 1 + granule);
+    uint64_t pages = ((va & mask) + size + mask) >> HV_TLB_PAGE_BITS;
+    uint64_t until_top = ((UINT64_MAX - first) >> HV_TLB_PAGE_BITS) + 1;
+    if (pages > until_top) pages = until_top;
+    uint64_t xt = 5ull << 48 | (uint64_t)((granule - 10) / 2) << 46 | (uint64_t)scale << 44 |
+                  (uint64_t)num << 39 | ((va >> granule) & 0x1fffffffffull);
+    for (uint64_t k = 0; k < pages + 2; k++) {
+        uint64_t page = first + ((k - 1) << HV_TLB_PAGE_BITS);
+        for (int t = 0; t < 3; t++)
+            hv_tlb_ent(cpu, (page >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1), t)->read_tag = page - HV_TLB_ADJ;
+    }
+    HvTlbStash *st = cpu->pc_state->stash;
+    for (int i = 0; i < HV_STASHES; i++) {
+        st[i].ttbr0 = i == 0 ? 0 : (uint64_t)(i & 1 ? 5 : 3) << 48 | 0x4000;
+        st[i].gen = st[i].saved_gen = 71;
+    }
+    hv_tlbi_apply(cpu, 0, 8, 6, op2, xt);
+    for (uint64_t k = 0; k < pages + 2; k++) {
+        uint64_t page = first + ((k - 1) << HV_TLB_PAGE_BITS);
+        int cleared = k > 0 && k <= pages;
+        for (int t = 0; t < 3; t++) {
+            checks++;
+            if ((hv_tlb_ent(cpu, (page >> HV_TLB_PAGE_BITS) & (HV_TLB_SIZE - 1), t)->read_tag == HV_TLB_INVALID) != cleared)
+                printf("  FAIL local range: granule %d page %llu table %d\n", granule, (unsigned long long)k, t), failures++;
+        }
+    }
+    for (int i = 0; i < HV_STASHES; i++) {
+        int drop = !kernel && i && (op2 == 3 || (i & 1));
+        checks++;
+        if (st[i].gen != st[i].saved_gen + (unsigned)drop)
+            printf("  FAIL local range: granule %d stash %d\n", granule, i), failures++;
+        st[i].ttbr0 = 0;
+    }
+}
+
 int main(void) {
     static HvMachine m;
     static HvCpu cpu;
@@ -382,6 +421,40 @@ int main(void) {
         hv_invalidate_code(&m, r->pa + (11ull << 14));
         checks++;
         if (m.slots[base + 1] || r->xhead[11] || m.nxchained != n0) printf("  FAIL the second page's exit stayed chained\n"), failures++;
+    }
+
+    {
+        hv_cpu_reset(&cpu, &m);
+        int layout = hv_tlb_tmajor;
+        for (hv_tlb_tmajor = 0; hv_tlb_tmajor <= 1; hv_tlb_tmajor++) {
+            check_local_range(&cpu, 0x100003000ull, 12, 0, 0, 1, 0);  /* starts inside a 16 KiB page */
+            check_local_range(&cpu, 0x100000000ull, 14, 1, 3, 3, 0);  /* upper 256-page path, all ASIDs */
+            check_local_range(&cpu, 0x100000000ull, 16, 0, 0, 1, 0);
+            check_local_range(&cpu, 0xffffffffffff8000ull, 14, 0, 0, 3, 1); /* ends exactly at 2^64 */
+        }
+        hv_tlb_tmajor = layout;
+        hv_cpu_reset(&cpu, &m);
+        cpu.tcr_el1 = 0;
+        cpu.ttbr0_el1 = 5ull << 48;
+        hv_ijc_switch(&cpu);
+        uint64_t base = 0x100000000ull, salt = cpu.ijc_salt[0];
+        unsigned pages[] = {0, 7, 31, 32};
+        static HvBlock fb[4];
+        uint64_t *slot[4];
+        for (int j = 0; j < 4; j++) {
+            fb[j] = (HvBlock){.va = base + ((uint64_t)pages[j] << 14) + 4 * (unsigned)(j + 1), .code = (uint32_t *)(uintptr_t)0x1234};
+            hv_ijc_fill(&cpu, &fb[j]);
+            slot[j] = cpu.pc_state->ijc + (size_t)hv_ijc_index(fb[j].va ^ salt) * 2;
+            checks++;
+            if (*slot[j] != (fb[j].va ^ salt)) printf("  FAIL expected local range test target\n"), failures++;
+        }
+        uint64_t xt = 5ull << 48 | 2ull << 46 | 15ull << 39 | base >> 14;
+        hv_tlbi_apply(&cpu, 0, 8, 6, 1, xt);
+        for (int j = 0; j < 4; j++) {
+            checks++;
+            if ((*slot[j] == (fb[j].va ^ salt)) != (pages[j] == 32))
+                printf("  FAIL local range IJC target on page %u\n", pages[j]), failures++;
+        }
     }
 
     /* Another CPU's big range TLBI (64 user pages of ASID 5: over the 32 done from here by default). With HV_RANGE_DROP it is done from here in one pass:

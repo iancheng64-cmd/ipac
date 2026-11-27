@@ -369,6 +369,41 @@ static void test_virtio_blk(HvDisk *aux) {
     check("four requests used", used_idx(ring), 4);
     rd8(bar + 0x1000);
 
+    /* A split OUT request may put data after the header in the same descriptor. */
+    uint8_t original[512], joined[512];
+    uint64_t end_sector = aux->size / 512 - 1;
+    check("read last sector before gather", hv_disk_read(aux, end_sector * 512, original, 512), 0);
+    h[0] = 1; h[2] = (uint32_t)end_sector;
+    memcpy(ram(hdr), h, sizeof h);
+    for (int i = 0; i < 512; i++) joined[i] = (uint8_t)(original[i] ^ 0xb3);
+    memcpy(ram(hdr) + 16, joined, 193);
+    memcpy(ram(data), joined + 193, 512 - 193);
+    put_desc(ring, 0, hdr, 16 + 193, 1, 1);
+    put_desc(ring, 1, data, 512 - 193 + 1, 1, 2);
+    put_desc(ring, 2, status, 1, 2, 0);
+    offer(ring, 0); wr16(bar + 0x3000, 0); hv_virtio_blk_drain(board.aux_blk);
+    check("whole write crossing end refused", ram(status)[0], 1);
+    check("read back rejected write", hv_disk_read(aux, end_sector * 512, back, 512), 0);
+    check("out-of-range write preserves sector", memcmp(back, original, 512), 0);
+    put_desc(ring, 1, data, 512 - 193, 1, 2);
+    offer(ring, 0); wr16(bar + 0x3000, 0); hv_virtio_blk_drain(board.aux_blk);
+    check("gather write status", ram(status)[0], 0);
+    check("sync gather write", hv_disk_sync(aux), 0);
+    check("read back gather write", hv_disk_read(aux, end_sector * 512, back, 512), 0);
+    check("gather write both fragments", memcmp(back, joined, 512), 0);
+    HvDisk alternate = *aux;
+    alternate.wfd = aux->fd;
+    alternate.fd = -1; /* test the explicit writer the uncached mode uses */
+    struct iovec pieces[] = {{original, 193}, {original, 0}, {original + 193, 319}};
+    alternate.readonly = 1;
+    check("readonly gather refused", hv_disk_writev(&alternate, end_sector * 512, pieces, 3), 0);
+    check("read after readonly request", hv_disk_read(aux, end_sector * 512, back, 512), 0);
+    check("readonly gather preserves sector", memcmp(back, joined, 512), 0);
+    alternate.readonly = 0;
+    check("alternate writer and empty segment", hv_disk_writev(&alternate, end_sector * 512, pieces, 3), 512);
+    check("read after alternate writer", hv_disk_read(aux, end_sector * 512, back, 512), 0);
+    check("alternate gather offsets preserved", memcmp(back, original, 512), 0);
+
     /* Noncontiguous destinations; the trailing byte of the last buffer is status, not disk data. */
     status = hdr + 0x13000;
     h[0] = 0;

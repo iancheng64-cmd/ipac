@@ -1,5 +1,27 @@
 import Foundation
 
+struct PhysicalMouseSession {
+    private var active = false
+    private(set) var scrollScale: Float = 0.3
+
+    mutating func start(scrollSpeed: Double) -> Bool {
+        guard !active else { return false }
+        updateScrollSpeed(scrollSpeed)
+        active = true
+        return true
+    }
+
+    mutating func stop() -> Bool {
+        guard active else { return false }
+        active = false
+        return true
+    }
+
+    mutating func updateScrollSpeed(_ value: Double) {
+        scrollScale = Float(value.isFinite ? min(max(value, 0.1), 1.5) : 0.3)
+    }
+}
+
 /// Compatibility mapping for GameController physical mice/trackpads only.
 /// Guest button IDs are 0 = left, 1 = right, 2 = middle; touch controls retain those IDs.
 struct PhysicalMouseButtons {

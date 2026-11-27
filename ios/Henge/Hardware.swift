@@ -211,6 +211,7 @@ final class HardwareMouse {
     static let reverseKey = "henge.mouse.reverse"
     static let scrollSpeedKey = "henge.mouse.scrollSpeed"
 
+    private var session = PhysicalMouseSession()
     private var observers: [NSObjectProtocol] = []
     private var mice: [GCMouse] = []
     private var buttons = PhysicalMouseButtons(swapsRightAndMiddle: false)
@@ -221,7 +222,8 @@ final class HardwareMouse {
     private var scrollsLogged = 0 // the first few, to see what a device's raw values look like
     private var lastScrollFirst: Float = 0, lastScrollSecond: Float = 0
 
-    func start() {
+    func start(scrollSpeed: Double) {
+        guard session.start(scrollSpeed: scrollSpeed) else { return }
         let defaults = UserDefaults.standard
         speed = defaults.object(forKey: Self.speedKey) == nil ? 1 : Float(defaults.double(forKey: Self.speedKey))
         reverse = defaults.bool(forKey: Self.reverseKey)
@@ -251,6 +253,7 @@ final class HardwareMouse {
     }
 
     func stop() {
+        guard session.stop() else { return }
         PointerLock.set(false)
         releaseButtons()
         observers.forEach(NotificationCenter.default.removeObserver)
@@ -266,6 +269,10 @@ final class HardwareMouse {
         mice.removeAll()
     }
 
+    func updateScrollSpeed(_ value: Double) {
+        session.updateScrollSpeed(value)
+    }
+
     func releaseButtons() {
         for button in buttons.releaseAll() { henge_vm_mouse_button(button, 0) }
     }
@@ -273,6 +280,8 @@ final class HardwareMouse {
     private func attach(_ mouse: GCMouse) {
         guard let input = mouse.mouseInput, !mice.contains(where: { $0 === mouse }) else { return }
         mice.append(mouse)
+        // Serialize GameController callbacks with session and SwiftUI settings changes.
+        mouse.handlerQueue = .main
         HengeLog.log("input", "mouse: \(mouse.vendorName ?? "?"), right button \(input.rightButton != nil), middle \(input.middleButton != nil)")
         input.mouseMovedHandler = { [weak self] _, dx, dy in self?.moved(dx, dy) }
         input.leftButton.pressedChangedHandler = { [weak self] _, _, pressed in self?.button(0, pressed) }
@@ -317,10 +326,7 @@ final class HardwareMouse {
         let mostlyHorizontal = abs(second) > 2 * abs(first)
         let verticalRaw = verticalChanged && !mostlyHorizontal ? -first : 0
         let horizontalRaw = horizontalChanged && !mostlyVertical ? second : 0
-        let defaults = UserDefaults.standard
-        let configured = defaults.object(forKey: Self.scrollSpeedKey) == nil
-            ? 0.3 : defaults.double(forKey: Self.scrollSpeedKey)
-        let scale = Float(configured.isFinite ? min(max(configured, 0.1), 1.5) : 0.3)
+        let scale = session.scrollScale
         let way: Int32 = reverse ? -1 : 1
         let horizontal = way * Self.wheelUnits(horizontalRaw, scale: scale)
         let vertical = way * Self.wheelUnits(verticalRaw, scale: scale)

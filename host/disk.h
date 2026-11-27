@@ -20,6 +20,8 @@ void hv_disk_close(HvDisk *d);
 int hv_disk_read(HvDisk *d, uint64_t off, void *buf, uint64_t len);
 /* Reads into scratch vectors; may advance them on a short read. Returns bytes actually read. */
 uint64_t hv_disk_readv(HvDisk *d, uint64_t off, struct iovec *vec, int count);
+/* Preflights the full range. Like readv, consumes scratch vectors on short I/O. */
+uint64_t hv_disk_writev(HvDisk *d, uint64_t off, struct iovec *vec, int count);
 int hv_disk_write(HvDisk *d, uint64_t off, const void *buf, uint64_t len);
 int hv_disk_flush(HvDisk *d);
 /* A lifecycle boundary always requests a file sync, regardless of the guest's flush policy. */

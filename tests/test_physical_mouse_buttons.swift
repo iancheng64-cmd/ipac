@@ -7,6 +7,18 @@ struct PhysicalMouseButtonTests {
     }
 
     static func main() {
+        var session = PhysicalMouseSession()
+        check(!session.stop(), "stopping before first start must have no side effect")
+        check(session.start(scrollSpeed: 0.6) && session.scrollScale == 0.6, "first start applies the setting")
+        session.updateScrollSpeed(1.2)
+        check(!session.start(scrollSpeed: 0.3) && session.scrollScale == 1.2, "a second start must not reset live settings or inputs")
+        check(session.stop() && !session.stop(), "teardown must only run once")
+        check(session.start(scrollSpeed: 0.7) && session.scrollScale == 0.7, "restart reloads the setting")
+        for (value, expected) in [(Double.nan, Float(0.3)), (.infinity, 0.3), (-1, 0.1), (9, 1.5)] {
+            session.updateScrollSpeed(value)
+            check(session.scrollScale == expected, "scroll scale fallback or limits changed")
+        }
+
         // The upstream default is unchanged; compatibility is opt-in.
         var standard = PhysicalMouseButtons(swapsRightAndMiddle: false)
         for button in [Int32(0), 1, 2] {
@@ -35,6 +47,6 @@ struct PhysicalMouseButtonTests {
         check(swapped.event(3, pressed: true) == nil, "unsupported code must be ignored")
         check(swapped.held.isEmpty, "invalid input must not stick")
 
-        print("PASS: standard mapping, right/middle swap, left drag, releases and disconnect cleanup")
+        print("PASS: physical mouse session lifecycle, live scroll speed, button mapping, drag and cleanup")
     }
 }

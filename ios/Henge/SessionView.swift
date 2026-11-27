@@ -201,9 +201,10 @@ struct SessionView: View {
         .onChange(of: confirmStop) { showing in
             if showing { HardwareKeys.releaseAll(); StickyKeys.shared.releaseAll() }
         }
+        .onChange(of: scrollSpeed) { value in HardwareMouse.shared.updateScrollSpeed(value) }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
-            HardwareMouse.shared.start()
+            HardwareMouse.shared.start(scrollSpeed: scrollSpeed)
             VolumeClicks.shared.start()
         }
         .onDisappear {
@@ -647,7 +648,7 @@ struct SessionView: View {
             return
         }
         UIApplication.shared.isIdleTimerDisabled = true
-        HardwareMouse.shared.start()
+        HardwareMouse.shared.start(scrollSpeed: scrollSpeed)
         InstantResume.clearInterruptedWrite(for: liveMac)
         let ram = GuestMemory.prepare(liveMac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")

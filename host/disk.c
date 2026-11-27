@@ -59,8 +59,9 @@ int hv_disk_read(HvDisk *d, uint64_t off, void *buf, uint64_t len) {
     return 0;
 }
 
-uint64_t hv_disk_readv(HvDisk *d, uint64_t off, struct iovec *vec, int count) {
-    if (off > d->size) return 0;
+static uint64_t disk_transferv(HvDisk *d, uint64_t off, struct iovec *vec, int count, int write_op) {
+    if (off > d->size || (write_op && d->readonly)) return 0;
+    int fd = write_op && d->wfd >= 0 ? d->wfd : d->fd;
     uint64_t remaining = d->size - off, done = 0;
     for (int i = 0; i < count; i++) {
         if (vec[i].iov_len > remaining) return 0;
@@ -73,7 +74,11 @@ uint64_t hv_disk_readv(HvDisk *d, uint64_t off, struct iovec *vec, int count) {
         while (nvec < count && nvec < IOV_MAX && bytes < DISK_IO_CHUNK && vec[nvec].iov_len <= DISK_IO_CHUNK - bytes)
             bytes += vec[nvec++].iov_len;
         off_t at = (off_t)(d->offset + off + done);
-        ssize_t n = nvec == 1 ? pread(d->fd, vec->iov_base, bytes, at) : preadv(d->fd, vec, nvec, at);
+        ssize_t n;
+        if (write_op)
+            n = nvec == 1 ? pwrite(fd, vec->iov_base, bytes, at) : pwritev(fd, vec, nvec, at);
+        else
+            n = nvec == 1 ? pread(fd, vec->iov_base, bytes, at) : preadv(fd, vec, nvec, at);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) break;
         done += (size_t)n;
@@ -88,6 +93,14 @@ uint64_t hv_disk_readv(HvDisk *d, uint64_t off, struct iovec *vec, int count) {
         }
     }
     return done;
+}
+
+uint64_t hv_disk_readv(HvDisk *d, uint64_t off, struct iovec *vec, int count) {
+    return disk_transferv(d, off, vec, count, 0);
+}
+
+uint64_t hv_disk_writev(HvDisk *d, uint64_t off, struct iovec *vec, int count) {
+    return disk_transferv(d, off, vec, count, 1);
 }
 
 int hv_disk_write(HvDisk *d, uint64_t off, const void *buf, uint64_t len) {

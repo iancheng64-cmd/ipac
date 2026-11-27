@@ -573,10 +573,16 @@ static int load_devices(R *r, HvVmapple *b, void **display, uint64_t *display_le
         if (in[i] && (load_virtio(r, VINP, &in[i]->vio) || R_RANGE(r, VINP, in[i], ring, dropped))) return -1;
     if (b->usb) {
         HvXhci *x = b->usb;
+        HvXhci saved;
+        size_t off = offsetof(HvXhci, reports), len = sizeof saved - off;
         if (load_pci(r, XHCI, &x->pci) ||
             r_section(r, XHCI, (uint8_t *)x + offsetof(HvXhci, usbcmd), offsetof(HvXhci, mu) - offsetof(HvXhci, usbcmd)) ||
-            r_section(r, XHCI, (uint8_t *)x + offsetof(HvXhci, reports), sizeof(HvXhci) - offsetof(HvXhci, reports)))
+            r_section(r, XHCI, (uint8_t *)&saved + off, len))
             return -1;
+        if (!hv_xhci_input_state_valid(&saved)) return r->err = EINVAL, -1;
+        pthread_mutex_lock(&x->mu);
+        memcpy((uint8_t *)x + off, (uint8_t *)&saved + off, len);
+        pthread_mutex_unlock(&x->mu);
     }
     void *blob;
     uint64_t len;
