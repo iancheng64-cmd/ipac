@@ -85,9 +85,11 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 ### 完整繁體中文介面與其他亮點
 
 - **全繁體中文介面與即時語言切換**：包含首頁、安裝流程、硬體與儲存設定、單機詳情、即時續玩（Instant Resume）、獨立執行 Mac App（實驗性）、JIT 精靈與本機配對（iOS / iPadOS 27）、以及系統相機／區域網路權限說明（`CFBundleDevelopmentRegion` = `zh-Hant`）。
-- **Sill 觸控手勢與 Apple 風格視覺鍵盤（v0.5.8 更新）**：
-  - 保留 Henge 原版頂部毛玻璃膠囊控制列與顯示手勢：點擊隱藏後顯示提示，隨時**四指同時輕點螢幕**即可重新呼出控制列（不會 5 秒自動隱藏，無頂端微調條）。
-  - 在膠囊控制列內建雙模式分段切換按鈕，可即時切換 **Sill 多指觸控板模式**（原生 Magic Trackpad 2 兩指捲動／縮放與三指切換桌面）與 **手勢觸控指標模式**（單指相對游標＋兩指捲動）。
+- **Sill 觸控手勢與 Apple 風格視覺鍵盤（v0.5.9 更新）**：
+  - 保留 Henge 原版頂部毛玻璃膠囊控制列：支援**四指輕點**或**四指長按**顯示／隱藏控制列。
+  - 在膠囊控制列內建雙模式分段切換按鈕：
+    - **Sill 多指觸控板模式**：原生 Magic Trackpad 2 兩指捲動／縮放，並支援 **Mac 原生三指拖曳（Three-Finger Drag）**、單指輕點左鍵與雙指輕點右鍵。
+    - **Sill 手勢觸控模式**：透過獨立 USB 絕對座標指標裝置達成與 Sill 全螢幕完全一致的操作——點哪裡按哪裡、長按右鍵、長按後拖曳一對一跟著手指移動、單指或雙指滑動平滑捲動、雙指輕點右鍵。
   - 內建 Apple iPadOS Magic Keyboard ＋ 毛玻璃質感 5 列完整 macOS QWERTY 視覺鍵盤，搭配 SF Symbols 功能／方向鍵、黏滯修飾鍵反白與 Caps Lock 綠燈，支援即時 `⌘C / ⌘V / ⌘Z / ⌘W / ⌘Q`、`Spotlight`、`Mission` 快捷列與 `中/英 IME` 切換。
 - **剪貼簿與共享資料夾**：在 Mac 終端機執行自動輸入的安裝指令（`curl -s http://10.0.2.4/.henge/install | sh`）並按 Return 後，「檔案 › iPac / Henge › Shared」即同步至 Mac 家目錄的 `Henge` 資料夾；Mac 複製文字自動同步至 iPad，iPad 複製文字後點選上方控制列第三顆貼上鈕即可貼入 Mac。
 - **外接螢幕支援**：連接 USB-C / HDMI 顯示器會自動雙螢幕分工，外接螢幕顯示 macOS 畫面，iPad 保留觸控板與鍵盤控制。
@@ -96,7 +98,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
 ## 安裝與下載
 
-直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.5.8-build117.ipa`。
+直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.5.9-build118.ipa`。
 
 ### 系統需求
 

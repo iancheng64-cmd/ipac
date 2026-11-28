@@ -3,14 +3,16 @@ import UIKit
 
 /// A surface backed by `SillTouchEngine`:
 /// - Sill Multi-Finger Trackpad mode: presents fingers to macOS via the emulated USB Magic Trackpad 2
-///   (2-finger scroll/pinch, 3-finger Spaces & Mission Control), plus optional tap-to-click / hold-to-drag.
-/// - Direct Touch Pointer mode: 1-finger relative cursor drag, 2-finger scroll, tap click, hold-to-drag.
-/// - Both modes: 4-finger quick tap anywhere toggles the floating HUD capsule cleanly without stray clicks.
+///   (2-finger scroll/pinch), Mac-native 3-finger drag, plus optional tap-to-click / hold-to-drag.
+/// - Direct Touch Pointer mode (Sill full-screen style): Port 3 USB absolute pointer
+///   (tap to click at location, hold for right-click, hold + drag 1:1, swipe for Magic Trackpad 2 scroll).
+/// - Both modes: 4-finger tap OR 4-finger long press cleanly toggles the floating HUD capsule.
 struct Trackpad: UIViewRepresentable {
-    /// Four fingers tapped together: the session toggles its floating controls.
+    /// Four fingers tapped or held together: the session toggles its floating controls.
     static let revealTap = Notification.Name("henge.trackpad.revealTap")
 
     var touchMode: TrackpadTouchMode = .trackpad
+    var screenRect: CGRect = .zero
     var pointerSpeed: Double = 1.0
     var scrollSpeed: Double = 0.3
     var reverseScrolling: Bool = false
@@ -27,6 +29,7 @@ struct Trackpad: UIViewRepresentable {
     }
 
     private func applyConfig(to view: Surface) {
+        view.screenRect = screenRect
         view.pointerSpeed = pointerSpeed
         view.scrollSpeed = scrollSpeed
         view.reverseScrolling = reverseScrolling
@@ -37,10 +40,12 @@ struct Trackpad: UIViewRepresentable {
     final class Surface: UIView, UIPointerInteractionDelegate {
         private let engine = SillTouchEngine(mode: .trackpad)
         private var holdTimer: Timer?
+        private var fourFingerHoldTimer: Timer?
         private let lightBuzz = UIImpactFeedbackGenerator(style: .light)
         private let mediumBuzz = UIImpactFeedbackGenerator(style: .medium)
         private var touchesLogged = 0
 
+        var screenRect: CGRect = .zero
         var pointerSpeed: Double = 1.0
         var scrollSpeed: Double = 0.3
         var reverseScrolling: Bool = false
@@ -63,6 +68,7 @@ struct Trackpad: UIViewRepresentable {
         func setTouchMode(_ mode: TrackpadTouchMode) {
             let result = engine.switchMode(to: mode, tsMs: SillTouchEngine.ms(ProcessInfo.processInfo.systemUptime))
             if result.cancelHoldTimer { cancelHold() }
+            if result.cancelFourFingerHoldTimer { cancelFourFingerHold() }
             execute(result.actions)
         }
 
@@ -81,19 +87,22 @@ struct Trackpad: UIViewRepresentable {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             let samples = makeSamples(touches)
             guard !samples.isEmpty else { return }
-            if engine.activeFingerCount == 0 && tapsClick {
+            if engine.activeFingerCount == 0 {
                 lightBuzz.prepare()
                 mediumBuzz.prepare()
             }
             let result = engine.touchesBegan(
                 samples,
                 viewSize: bounds.size,
+                screenRect: screenRect,
                 tapsClick: tapsClick,
                 now: ProcessInfo.processInfo.systemUptime
             )
             if result.cancelHoldTimer { cancelHold() }
+            if result.cancelFourFingerHoldTimer { cancelFourFingerHold() }
             execute(result.actions)
             if result.armHoldTimer { armHold() }
+            if result.armFourFingerHoldTimer { armFourFingerHold() }
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -103,6 +112,7 @@ struct Trackpad: UIViewRepresentable {
             let result = engine.touchesMoved(
                 samples,
                 viewSize: bounds.size,
+                screenRect: screenRect,
                 tapsClick: tapsClick,
                 pointerSpeed: pointerSpeed,
                 scrollSpeed: scrollSpeed,
@@ -110,6 +120,7 @@ struct Trackpad: UIViewRepresentable {
                 frameTimestamp: ts
             )
             if result.cancelHoldTimer { cancelHold() }
+            if result.cancelFourFingerHoldTimer { cancelFourFingerHold() }
             execute(result.actions)
         }
 
@@ -135,6 +146,7 @@ struct Trackpad: UIViewRepresentable {
                 now: ProcessInfo.processInfo.systemUptime
             )
             if result.cancelHoldTimer { cancelHold() }
+            if result.cancelFourFingerHoldTimer { cancelFourFingerHold() }
             execute(result.actions)
         }
 
@@ -155,6 +167,10 @@ struct Trackpad: UIViewRepresentable {
                     henge_vm_mouse_button(button, down ? 1 : 0)
                 case let .mouseScroll(dx, dy):
                     henge_vm_mouse_scroll(dx, dy)
+                case let .absolutePointer(x, y, buttons):
+                    henge_vm_absolute_pointer(x, y, buttons)
+                case .absoluteCancel:
+                    henge_vm_absolute_cancel()
                 case .hapticLight:
                     lightBuzz.impactOccurred()
                 case .hapticMedium:
@@ -184,6 +200,21 @@ struct Trackpad: UIViewRepresentable {
         private func cancelHold() {
             holdTimer?.invalidate()
             holdTimer = nil
+        }
+
+        private func armFourFingerHold() {
+            cancelFourFingerHold()
+            let timer = Timer(timeInterval: SillTouchEngine.fourFingerHoldDelay, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                self.execute(self.engine.fireFourFingerHoldTimer())
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            fourFingerHoldTimer = timer
+        }
+
+        private func cancelFourFingerHold() {
+            fourFingerHoldTimer?.invalidate()
+            fourFingerHoldTimer = nil
         }
     }
 }

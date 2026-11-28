@@ -13,8 +13,8 @@
    any thread (hv_xhci_key, hv_xhci_touch); the CPU thread delivers them
    (hv_xhci_poll). */
 #define HV_XHCI_SLOTS 8
-#define HV_XHCI_PORTS 2
-#define HV_XHCI_DEVICES 2
+#define HV_XHCI_PORTS 3
+#define HV_XHCI_DEVICES 3
 #define HV_XHCI_INTRS 4
 #define HV_XHCI_EPS 32 /* device context index 1..31 */
 #define HV_XHCI_REPORTS 256
@@ -63,6 +63,9 @@ typedef struct HvXhci {
     uint32_t rhead, rtail;
     uint8_t state[8];      /* modifiers, reserved, six keys: the current report */
     uint64_t delivered;
+    uint8_t abs_reports[HV_XHCI_REPORTS][5];
+    uint32_t abs_head, abs_tail;
+    uint8_t abs_state[5];
     /* Magic Trackpad 2: the fingers on the pad and their reports (Apple
        multitouch format, report ID 2: 12-byte prefix plus 9 bytes a finger). */
     struct HvTpFinger {
@@ -104,6 +107,9 @@ void hv_xhci_touch(HvXhci *x, int id, int phase, int px, int py, uint32_t ts_ms)
 void hv_xhci_touch_frame(HvXhci *x, uint32_t ts_ms);
 /* Any thread: the pad's full press (a click), down or up. */
 void hv_xhci_touch_button(HvXhci *x, int down);
+/* Any thread: absolute USB HID pointer (0..32767 x 0..32767, button bitmask). */
+int hv_xhci_absolute(HvXhci *x, int px, int py, unsigned buttons);
+void hv_xhci_absolute_cancel(HvXhci *x);
 /* CPU thread: hand waiting reports to the guest. */
 void hv_xhci_poll(HvXhci *x);
 

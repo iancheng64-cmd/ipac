@@ -182,6 +182,45 @@ static void saved_input_validation(void) {
     assert(!hv_xhci_input_state_valid(&x));
     x.tp_f1_len = sizeof x.tp_f1;
     assert(hv_xhci_input_state_valid(&x));
+    x.abs_tail = HV_XHCI_REPORTS + 1;
+    assert(!hv_xhci_input_state_valid(&x));
+    x.abs_tail = HV_XHCI_REPORTS;
+    assert(hv_xhci_input_state_valid(&x));
+}
+
+static void absolute_pointer_reports(void) {
+    HvXhci x = {.m = &machine};
+    pthread_mutex_init(&x.mu, NULL);
+    /* Out-of-range coordinates rejected. */
+    assert(!hv_xhci_absolute(&x, -1, 100, 0));
+    assert(!hv_xhci_absolute(&x, 32768, 100, 0));
+    assert(!hv_xhci_absolute(&x, 100, 32768, 0));
+    assert(x.abs_tail == 0);
+
+    /* Consecutive motion with unchanged buttons coalesces in place; button edge preserves slot. */
+    assert(hv_xhci_absolute(&x, 1000, 2000, 0));
+    assert(hv_xhci_absolute(&x, 1500, 2500, 0));
+    assert(x.abs_tail == 1);
+    assert(hv_xhci_absolute(&x, 1500, 2500, 1));
+    assert(hv_xhci_absolute(&x, 1600, 2600, 1));
+    assert(hv_xhci_absolute(&x, 1600, 2600, 0));
+    assert(x.abs_tail == 3);
+
+    /* Cancel clears any held button cleanly. */
+    assert(hv_xhci_absolute(&x, 2000, 3000, 1));
+    assert(x.abs_state[0] == 1);
+    hv_xhci_absolute_cancel(&x);
+    assert(x.abs_state[0] == 0 && x.abs_tail == 5);
+
+    drain(&x, 2, 5, 8);
+    assert(x.abs_head == x.abs_tail);
+    const uint8_t *out = (const uint8_t *)guest + 0x2000;
+    uint16_t rx = (uint16_t)(out[1] | (out[2] << 8));
+    uint16_t ry = (uint16_t)(out[3] | (out[4] << 8));
+    assert(out[0] == 0 && rx == 1500 && ry == 2500);
+    assert(out[8] == 1 && (uint16_t)(out[9] | (out[10] << 8)) == 1600);
+    assert(out[4 * 8] == 0);
+    pthread_mutex_destroy(&x.mu);
 }
 
 int main(void) {
@@ -191,6 +230,7 @@ int main(void) {
     touch_reports();
     stalled_input();
     saved_input_validation();
+    absolute_pointer_reports();
     hv_machine_free(&machine);
     puts("input delivery: identical mouse events, 3 -> 1 wakes; two-finger movement: one wake, all seven USB reports delivered");
     return 0;

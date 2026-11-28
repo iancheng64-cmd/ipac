@@ -99,6 +99,8 @@ void henge_vm_set_cursor_style(int scale, int sharp);
 void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
 void henge_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void henge_vm_touch_button(int down); /* the pad's full press (a click) */
+void henge_vm_absolute_pointer(int px, int py, int buttons); /* 0..32767 absolute touch pointer */
+void henge_vm_absolute_cancel(void);
 /* Where the guest has its pointer, in display pixels. 0, or -1 before it has one. */
 int henge_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */

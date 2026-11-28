@@ -71,12 +71,17 @@ struct SessionView: View {
         )
     }
 
-    private func revealControlsFromGesture() {
+    private func toggleControlsFromGesture() {
         var hidden = controlsHidden
+        var kb = keyboard
         var hint = showRevealHint
-        SessionHUDPolicy.revealControls(controlsHidden: &hidden, showRevealHint: &hint)
+        SessionHUDPolicy.toggleControls(controlsHidden: &hidden, keyboard: &kb, showRevealHint: &hint)
         controlsHidden = hidden
+        keyboard = kb
         showRevealHint = hint
+        if hidden {
+            sillKeyboard.releaseAll()
+        }
     }
 
     private func toggleSillKeyboard() {
@@ -137,10 +142,11 @@ struct SessionView: View {
                 if state != 2 {
                     Trackpad(
                         touchMode: touchMode,
+                        screenRect: layout.screen.offsetBy(dx: -layout.touch.minX, dy: -layout.touch.minY),
                         pointerSpeed: mouseSpeed,
                         scrollSpeed: scrollSpeed,
                         reverseScrolling: reverseScrolling,
-                        onToggleHud: revealControlsFromGesture
+                        onToggleHud: toggleControlsFromGesture
                     )
                     .frame(width: layout.touch.width, height: layout.touch.height)
                     .position(x: layout.touch.midX, y: layout.touch.midY)
@@ -233,7 +239,7 @@ struct SessionView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { pointerRefused = PointerLock.refused }
             }
             .onReceive(NotificationCenter.default.publisher(for: Trackpad.revealTap)) { _ in
-                revealControlsFromGesture()
+                toggleControlsFromGesture()
             }
             .onAppear { shown = layout.shown }
             .onChange(of: layout.shown) { shown = $0 }
@@ -261,6 +267,7 @@ struct SessionView: View {
             HardwareKeys.releaseAll()
             sillKeyboard.releaseAll()
             HardwareMouse.shared.releaseButtons()
+            henge_vm_absolute_cancel()
             VolumeClicks.shared.releaseButtons()
             if phase == .inactive { InstantResume.pause() }
             if phase == .background && bootRAM > 0 { InstantResume.suspend(currentMac, ramMB: bootRAM, cpus: bootCPUs) }
@@ -287,6 +294,7 @@ struct SessionView: View {
             HardwareKeys.releaseAll()
             sillKeyboard.releaseAll()
             HardwareMouse.shared.stop()
+            henge_vm_absolute_cancel()
             VolumeClicks.shared.stop()
         }
         .modifier(ExternalMacDisplayModifier(presentation: MacPresentation(display: display, aspect: mac.aspect)))
@@ -413,7 +421,7 @@ struct SessionView: View {
                     pointerSpeed: mouseSpeed,
                     scrollSpeed: scrollSpeed,
                     reverseScrolling: reverseScrolling,
-                    onToggleHud: revealControlsFromGesture
+                    onToggleHud: toggleControlsFromGesture
                 )
                 if compact {
                     Text(touchMode == .trackpad ? L10n.text("Sill 觸控板") : L10n.text("直接觸控"))
@@ -902,6 +910,7 @@ struct SessionView: View {
                 sillKeyboard.releaseAll()
                 HardwareKeys.releaseAll()
                 HardwareMouse.shared.stop()
+                henge_vm_absolute_cancel()
                 UIApplication.shared.isIdleTimerDisabled = false
                 HengeLog.log("session", "showing stopped Mac: \(String(cString: henge_vm_exit_reason()))")
                 if henge_vm_exit_outcome() == Int32(HENGE_VM_OUTCOME_RESTART.rawValue) && henge_vm_can_start() != 0 {

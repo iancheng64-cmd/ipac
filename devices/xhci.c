@@ -133,9 +133,25 @@ struct HvXhciDev {
     const uint8_t *report_desc;
     unsigned report_desc_len;
 };
+/* Port 3: standard HID absolute mouse ("iPac Touch Pointer"), distinct from the relative trackpad. */
+static const uint8_t abs_report_desc[] = {
+    0x05, 1, 0x09, 2, 0xa1, 1, 0x09, 1, 0xa1, 0,
+    0x05, 9, 0x19, 1, 0x29, 3, 0x15, 0, 0x25, 1, 0x75, 1, 0x95, 3, 0x81, 2,
+    0x75, 5, 0x95, 1, 0x81, 3, 0x05, 1, 0x09, 0x30, 0x09, 0x31,
+    0x15, 0, 0x26, 0xff, 0x7f, 0x75, 16, 0x95, 2, 0x81, 2, 0xc0, 0xc0
+};
+static const uint8_t abs_device_desc[18] = {
+    18, 1, 0, 2, 0, 0, 0, 64, 0x09, 0x12, 1, 0, 0, 1, 1, 2, 3, 1
+};
+static const uint8_t abs_config_desc[34] = {
+    9, 2, 34, 0, 1, 1, 0, 0x80, 1, 9, 4, 0, 0, 1, 3, 0, 0, 0,
+    9, 0x21, 0x11, 1, 0, 1, 0x22, sizeof abs_report_desc, 0, 7, 5, 0x81, 3, 8, 0, 4
+};
+static const char *const abs_strings[] = {NULL, "iPac", "iPac Touch Pointer", "3"};
 static const struct HvXhciDev devs[HV_XHCI_DEVICES] = {
     {kbd_strings, kbd_device_desc, kbd_config_desc, kbd_report_desc, sizeof kbd_report_desc},
     {tp_strings, tp_device_desc, tp_config_desc, tp_report_desc, sizeof tp_report_desc},
+    {abs_strings, abs_device_desc, abs_config_desc, abs_report_desc, sizeof abs_report_desc},
 };
 
 static int xlog(void) {
@@ -370,6 +386,13 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
         src = tmp, len = 1;
     } else if (type == 0xa1 && req == 1) { /* GET_REPORT: wValue is (type << 8) | report ID */
         if (x->slots[slot].dev == 0) src = x->state, len = 8;
+        else if (x->slots[slot].dev == 2) {
+            if (value != 0x0100) return -1;
+            pthread_mutex_lock(&x->mu);
+            memcpy(tmp, x->abs_state, 5);
+            pthread_mutex_unlock(&x->mu);
+            src = tmp; len = 5;
+        }
         else {
             int rtype = value >> 8, rid = value & 0xff;
             if (rtype == 3) { /* feature: the sensor-configuration registers */
@@ -502,6 +525,18 @@ static void run_ep_in(HvXhci *x, int slot) {
             wr(x, buf, x->reports[x->rhead % HV_XHCI_REPORTS], n);
             x->rhead++;
             x->delivered++;
+            transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, dci);
+        }
+    } else if (s->dev == 2) {
+        while (x->abs_head != x->abs_tail && ring_peek(x, r, trb, &at)) {
+            int type = (trb[3] >> 10) & 0x3f;
+            ring_advance(r);
+            if (type != TRB_NORMAL) continue;
+            uint64_t buf = (uint64_t)trb[1] << 32 | trb[0];
+            uint32_t want = trb[2] & 0x1ffff;
+            uint32_t n = want < 5 ? want : 5;
+            wr(x, buf, x->abs_reports[x->abs_head % HV_XHCI_REPORTS], n);
+            x->abs_head++;
             transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, dci);
         }
     } else {
@@ -746,6 +781,9 @@ static void reset(HvXhci *x) {
     for (int s = 1; s <= HV_XHCI_SLOTS; s++) x->slots[s].dev = -1;
     memset(x->reports, 0, sizeof x->reports);
     x->rhead = x->rtail = 0;
+    memset(x->abs_reports, 0, sizeof x->abs_reports);
+    x->abs_head = x->abs_tail = 0;
+    memset(x->abs_state, 0, sizeof x->abs_state);
     memset(x->state, 0, sizeof x->state);
     memset(x->tp_fingers, 0, sizeof x->tp_fingers);
     x->tp_button = 0;
@@ -758,7 +796,7 @@ static void reset(HvXhci *x) {
     x->tp_multi_logs = 0;
     x->tp_f1_len = 0;
     for (int p = 0; p < HV_XHCI_PORTS; p++)
-        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
+        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p == 1 ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
     update_irq(x);
 }
 
@@ -786,7 +824,7 @@ static uint64_t bar_read(HvPciDev *d, int bar, uint64_t off, unsigned size) {
         if (size == 8 && i + 1 < 8) v |= (uint64_t)cap[i + 1] << 32;
         v >>= 8 * (off & 3);
     } else if (off >= XECP && off < XECP + 16) { /* Supported Protocol: USB 2.0 on every port */
-        static const uint32_t ext[4] = {2u | 0x0200u << 16, 0x20425355, 1u | ((1u << HV_XHCI_PORTS) - 1u) << 8, 0};
+        static const uint32_t ext[4] = {2u | 0x0200u << 16, 0x20425355, 1u | (uint32_t)HV_XHCI_PORTS << 8, 0};
         uint32_t i = (uint32_t)(off - XECP) / 4;
         v = ext[i];
         if (size == 8 && i + 1 < 4) v |= (uint64_t)ext[i + 1] << 32;
@@ -986,7 +1024,8 @@ void hv_xhci_key_linux(HvXhci *x, uint16_t code, int down) {
 /* ---- the Magic Trackpad 2's reports ---- */
 
 int hv_xhci_input_state_valid(const HvXhci *x) {
-    if (x->rtail - x->rhead > HV_XHCI_REPORTS || x->tp_rtail - x->tp_rhead > HV_TP_REPORTS ||
+    if (x->rtail - x->rhead > HV_XHCI_REPORTS || x->abs_tail - x->abs_head > HV_XHCI_REPORTS ||
+        x->tp_rtail - x->tp_rhead > HV_TP_REPORTS ||
         x->tp_f1_len < 0 || (size_t)x->tp_f1_len > sizeof x->tp_f1) return 0;
     for (uint32_t i = x->tp_rhead; i != x->tp_rtail; i++) {
         unsigned len = x->tp_rlen[i % HV_TP_REPORTS];
@@ -1200,15 +1239,56 @@ void hv_xhci_touch_button(HvXhci *x, int down) {
     hv_machine_wake(x->m);
 }
 
+static void abs_enqueue(HvXhci *x, const uint8_t report[5]) {
+    uint32_t tail = x->abs_tail;
+    if (tail != x->abs_head && x->abs_reports[(tail - 1) % HV_XHCI_REPORTS][0] == report[0]) {
+        memcpy(x->abs_reports[(tail - 1) % HV_XHCI_REPORTS], report, 5);
+    } else {
+        if (tail - x->abs_head == HV_XHCI_REPORTS) {
+            x->abs_head++;
+        }
+        memcpy(x->abs_reports[tail % HV_XHCI_REPORTS], report, 5);
+        __atomic_store_n(&x->abs_tail, tail + 1, __ATOMIC_RELEASE);
+    }
+    memcpy(x->abs_state, report, 5);
+}
+
+int hv_xhci_absolute(HvXhci *x, int px, int py, unsigned buttons) {
+    if (!x || (unsigned)px > 32767 || (unsigned)py > 32767) return 0;
+    uint8_t report[5] = {(uint8_t)(buttons & 7), (uint8_t)px, (uint8_t)(px >> 8), (uint8_t)py, (uint8_t)(py >> 8)};
+    pthread_mutex_lock(&x->mu);
+    abs_enqueue(x, report);
+    pthread_mutex_unlock(&x->mu);
+    if (x->m) hv_machine_wake(x->m);
+    return 1;
+}
+
+void hv_xhci_absolute_cancel(HvXhci *x) {
+    if (!x) return;
+    int woke = 0;
+    pthread_mutex_lock(&x->mu);
+    if (x->abs_state[0]) {
+        uint8_t up[5];
+        memcpy(up, x->abs_state, 5);
+        up[0] = 0;
+        abs_enqueue(x, up);
+        woke = 1;
+    }
+    pthread_mutex_unlock(&x->mu);
+    if (woke && x->m) hv_machine_wake(x->m);
+}
+
 void hv_xhci_poll(HvXhci *x) {
     if (!x) return;
     int have_kbd = __atomic_load_n(&x->rhead, __ATOMIC_RELAXED) != __atomic_load_n(&x->rtail, __ATOMIC_ACQUIRE);
     int have_tp = __atomic_load_n(&x->tp_rhead, __ATOMIC_RELAXED) != __atomic_load_n(&x->tp_rtail, __ATOMIC_ACQUIRE);
-    if (!have_kbd && !have_tp) return;
+    int have_abs = __atomic_load_n(&x->abs_head, __ATOMIC_RELAXED) != __atomic_load_n(&x->abs_tail, __ATOMIC_ACQUIRE);
+    if (!have_kbd && !have_tp && !have_abs) return;
     for (int slot = 1; slot <= HV_XHCI_SLOTS; slot++) {
         int dev = x->slots[slot].dev;
         if (dev == 0 && have_kbd) run_ep_in(x, slot);
         else if (dev == 1 && have_tp) run_ep_in(x, slot);
+        else if (dev == 2 && have_abs) run_ep_in(x, slot);
     }
 }
 

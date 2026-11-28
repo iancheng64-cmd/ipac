@@ -139,58 +139,142 @@ struct SillControlsTests {
             ],
             viewSize: viewSize, tapsClick: false, now: 4.0
         )
-        expect(fourDown.cancelHoldTimer, "4-finger tap cancels hold")
+        expect(fourDown.cancelHoldTimer && fourDown.armFourFingerHoldTimer, "4-finger tap cancels 1-finger hold and arms 4-finger hold")
         let fourUp = engine.touchesEnded([21, 22, 23, 24], tapsClick: false, tsMs: 4200, now: 4.2)
         expect(fourUp.actions.contains(.toggleHud), "4-finger quick tap emits toggleHud")
         expect(!fourUp.actions.contains(where: { if case .mouseButton = $0 { return true }; return false }),
                "4-finger tap never emits stray mouse button events")
 
-        // 4. Direct Touch Pointer mode: relative move accumulation, 2-finger scroll, mode switch cleanup.
-        let direct = SillTouchEngine(mode: .directPointer)
-        let db = direct.touchesBegan(
-            [SillTouchSample(token: 31, location: CGPoint(x: 500, y: 300), previousLocation: CGPoint(x: 500, y: 300), timestamp: 5.0)],
-            viewSize: viewSize, tapsClick: true, now: 5.0
+        // 4-finger long press -> toggles HUD immediately when hold timer fires, and lift does NOT double-toggle.
+        let fourHoldDown = engine.touchesBegan(
+            [
+                SillTouchSample(token: 25, location: CGPoint(x: 100, y: 200), previousLocation: CGPoint(x: 100, y: 200), timestamp: 4.4),
+                SillTouchSample(token: 26, location: CGPoint(x: 160, y: 200), previousLocation: CGPoint(x: 160, y: 200), timestamp: 4.4),
+                SillTouchSample(token: 27, location: CGPoint(x: 220, y: 200), previousLocation: CGPoint(x: 220, y: 200), timestamp: 4.4),
+                SillTouchSample(token: 28, location: CGPoint(x: 280, y: 200), previousLocation: CGPoint(x: 280, y: 200), timestamp: 4.4),
+            ],
+            viewSize: viewSize, tapsClick: true, now: 4.4
         )
-        expect(!db.actions.contains(where: { if case .hidTouch = $0 { return true }; return false }),
-               "Direct Pointer mode does not emit USB trackpad HID touches")
-        let dm1 = direct.touchesMoved(
-            [SillTouchSample(token: 31, location: CGPoint(x: 500.4, y: 300.2), previousLocation: CGPoint(x: 500.0, y: 300.0), timestamp: 5.02)],
-            viewSize: viewSize, tapsClick: true, pointerSpeed: 1.0, scrollSpeed: 0.5, reverseScrolling: false, frameTimestamp: 5.02
-        )
-        let dm2 = direct.touchesMoved(
-            [SillTouchSample(token: 31, location: CGPoint(x: 501.2, y: 300.9), previousLocation: CGPoint(x: 500.4, y: 300.2), timestamp: 5.04)],
-            viewSize: viewSize, tapsClick: true, pointerSpeed: 1.0, scrollSpeed: 0.5, reverseScrolling: false, frameTimestamp: 5.04
-        )
-        expect(dm1.actions.isEmpty, "Sub-pixel delta under 0.5 waits for next move")
-        expect(dm2.actions == [.mouseMove(dx: 1, dy: 1)], "Sub-pixel remainders accumulate cleanly across moves")
-        _ = direct.touchesEnded([31], tapsClick: true, tsMs: 5500, now: 5.5)
+        expect(fourHoldDown.armFourFingerHoldTimer, "4-finger hold arms long-press HUD toggle")
+        let fourHoldActs = engine.fireFourFingerHoldTimer()
+        expect(fourHoldActs == [.hapticMedium, .toggleHud], "4-finger long press toggles HUD immediately with medium haptic")
+        let fourHoldUp = engine.touchesEnded([25, 26, 27, 28], tapsClick: true, tsMs: 5100, now: 5.1)
+        expect(!fourHoldUp.actions.contains(.toggleHud), "Lifting after 4-finger long press never double-toggles HUD")
 
-        // 2-finger scroll in direct pointer mode (including reverse scrolling).
+        // 3-finger Mac-native drag in Trackpad mode: lifts HID touches, starts left drag after 5pt slop, survives early single-finger lift, releases on all up.
+        let threeDown = engine.touchesBegan(
+            [
+                SillTouchSample(token: 61, location: CGPoint(x: 300, y: 300), previousLocation: CGPoint(x: 300, y: 300), timestamp: 6.0),
+                SillTouchSample(token: 62, location: CGPoint(x: 340, y: 300), previousLocation: CGPoint(x: 340, y: 300), timestamp: 6.0),
+                SillTouchSample(token: 63, location: CGPoint(x: 380, y: 300), previousLocation: CGPoint(x: 380, y: 300), timestamp: 6.0),
+            ],
+            viewSize: viewSize, tapsClick: false, now: 6.0
+        )
+        expect(engine.threeFingerTracking && !engine.threeFingerDragActive && !threeDown.actions.contains(where: { if case .hidTouch = $0 { return true }; return false }),
+               "3 fingers enter tracking without emitting HID Mission Control contacts")
+        let threeSmallMove = engine.touchesMoved(
+            [
+                SillTouchSample(token: 61, location: CGPoint(x: 302, y: 300), previousLocation: CGPoint(x: 300, y: 300), timestamp: 6.02),
+                SillTouchSample(token: 62, location: CGPoint(x: 342, y: 300), previousLocation: CGPoint(x: 340, y: 300), timestamp: 6.02),
+                SillTouchSample(token: 63, location: CGPoint(x: 382, y: 300), previousLocation: CGPoint(x: 380, y: 300), timestamp: 6.02),
+            ],
+            viewSize: viewSize, tapsClick: false, pointerSpeed: 1.0, scrollSpeed: 0.3, reverseScrolling: false, frameTimestamp: 6.02
+        )
+        expect(!engine.threeFingerDragActive && threeSmallMove.actions.isEmpty, "Micro jitter below 5pt slop does not grab yet")
+        let threeDragMove = engine.touchesMoved(
+            [
+                SillTouchSample(token: 61, location: CGPoint(x: 312, y: 306), previousLocation: CGPoint(x: 302, y: 300), timestamp: 6.04),
+                SillTouchSample(token: 62, location: CGPoint(x: 352, y: 306), previousLocation: CGPoint(x: 342, y: 300), timestamp: 6.04),
+                SillTouchSample(token: 63, location: CGPoint(x: 392, y: 306), previousLocation: CGPoint(x: 382, y: 300), timestamp: 6.04),
+            ],
+            viewSize: viewSize, tapsClick: false, pointerSpeed: 1.0, scrollSpeed: 0.3, reverseScrolling: false, frameTimestamp: 6.04
+        )
+        expect(engine.threeFingerDragActive && threeDragMove.actions.contains(.mouseButton(button: 0, down: true)) && threeDragMove.actions.contains(.mouseMove(dx: 14, dy: 8)),
+               "3-finger move past slop starts left drag and moves cursor smoothly")
+        let partialLift = engine.touchesEnded([63], tapsClick: false, tsMs: 6080, now: 6.08)
+        expect(!partialLift.actions.contains(.mouseButton(button: 0, down: false)) && engine.threeFingerDragActive,
+               "Lifting 1 of 3 fingers keeps drag alive until gesture finishes")
+        let threeEnd = engine.touchesEnded([61, 62], tapsClick: false, tsMs: 6120, now: 6.12)
+        expect(!engine.threeFingerDragActive && threeEnd.actions.contains(.mouseButton(button: 0, down: false)),
+               "3-finger drag releases left button cleanly when all fingers lift")
+
+        // 4. Direct Touch Pointer mode (Sill full-screen style): Port 3 USB absolute pointer + synthetic MT2 scroll.
+        let screenRect = CGRect(x: 100, y: 50, width: 800, height: 600)
+        let mappedMid = SillTouchEngine.absolutePoint(location: CGPoint(x: 500, y: 350), in: screenRect, fallbackSize: viewSize)
+        expect(mappedMid.x == 16384 && mappedMid.y == 16384, "screenRect center maps accurately to 0...32767 midpoint")
+
+        let direct = SillTouchEngine(mode: .directPointer)
+        // 1-finger tap -> left click at touched absolute position.
+        let db = direct.touchesBegan(
+            [SillTouchSample(token: 31, location: CGPoint(x: 500, y: 350), previousLocation: CGPoint(x: 500, y: 350), timestamp: 7.0)],
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, now: 7.0
+        )
+        expect(db.armHoldTimer && db.actions == [.absolutePointer(x: 16384, y: 16384, buttons: 0)],
+               "Direct touch moves Port 3 absolute pointer on finger down")
+        let de = direct.touchesEnded([31], tapsClick: true, tsMs: 7120, now: 7.12)
+        expect(de.actions.contains(.absolutePointer(x: 16384, y: 16384, buttons: 1)) && de.actions.contains(.absolutePointer(x: 16384, y: 16384, buttons: 0)),
+               "Direct touch quick tap left-clicks at touched macOS pixel")
+
+        // 1-finger long-press without move -> right-click upon release.
+        _ = direct.touchesBegan(
+            [SillTouchSample(token: 32, location: CGPoint(x: 500, y: 350), previousLocation: CGPoint(x: 500, y: 350), timestamp: 8.0)],
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, now: 8.0
+        )
+        let holdDirect = direct.fireHoldTimer()
+        expect(direct.directHeld && holdDirect == [.hapticMedium], "Direct long press arms right-click / drag with medium haptic")
+        let rightClickEnd = direct.touchesEnded([32], tapsClick: true, tsMs: 8500, now: 8.5)
+        expect(rightClickEnd.actions.contains(.absolutePointer(x: 16384, y: 16384, buttons: 2)) && rightClickEnd.actions.contains(.absolutePointer(x: 16384, y: 16384, buttons: 0)),
+               "Lifting stationary long press sends right-click at anchor point")
+
+        // 1-finger long-press + move -> 1:1 absolute drag.
+        _ = direct.touchesBegan(
+            [SillTouchSample(token: 33, location: CGPoint(x: 500, y: 350), previousLocation: CGPoint(x: 500, y: 350), timestamp: 9.0)],
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, now: 9.0
+        )
+        _ = direct.fireHoldTimer()
+        let dragMove = direct.touchesMoved(
+            [SillTouchSample(token: 33, location: CGPoint(x: 900, y: 350), previousLocation: CGPoint(x: 500, y: 350), timestamp: 9.45)],
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, pointerSpeed: 1.0, scrollSpeed: 0.3, reverseScrolling: false, frameTimestamp: 9.45
+        )
+        expect(direct.directDragging && dragMove.actions == [.absolutePointer(x: 16384, y: 16384, buttons: 1), .absolutePointer(x: 32767, y: 16384, buttons: 1)],
+               "Moving after long press presses left button at anchor and drags 1:1 to destination")
+        let dragEnd = direct.touchesEnded([33], tapsClick: true, tsMs: 9600, now: 9.6)
+        expect(!direct.directDragging && dragEnd.actions.contains(.absolutePointer(x: 32767, y: 16384, buttons: 0)),
+               "Lifting direct drag releases left button at final position")
+
+        // 1-finger swipe past slop without long press -> synthetic 2-finger Magic Trackpad 2 scroll + lift (never clicks).
+        _ = direct.touchesBegan(
+            [SillTouchSample(token: 34, location: CGPoint(x: 500, y: 350), previousLocation: CGPoint(x: 500, y: 350), timestamp: 10.0)],
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, now: 10.0
+        )
+        let scrollSwipe = direct.touchesMoved(
+            [SillTouchSample(token: 34, location: CGPoint(x: 500, y: 320), previousLocation: CGPoint(x: 500, y: 350), timestamp: 10.04)],
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, pointerSpeed: 1.0, scrollSpeed: 0.3, reverseScrolling: false, frameTimestamp: 10.04
+        )
+        expect(direct.directScrolling
+               && scrollSwipe.actions.contains(where: { if case .hidTouch(id: 9, phase: 0, x: _, y: _, tsMs: _) = $0 { return true }; return false })
+               && scrollSwipe.actions.contains(where: { if case .hidTouch(id: 10, phase: 1, x: _, y: _, tsMs: _) = $0 { return true }; return false }),
+               "1-finger swipe in direct mode drives smooth synthetic 2-finger Magic Trackpad 2 scrolling")
+        let swipeUp = direct.touchesEnded([34], tapsClick: true, tsMs: 10200, now: 10.2)
+        expect(!direct.directScrolling
+               && swipeUp.actions.contains(.hidTouch(id: 9, phase: 2, x: 0, y: 0, tsMs: 10200))
+               && swipeUp.actions.contains(.hidTouch(id: 10, phase: 2, x: 0, y: 0, tsMs: 10200))
+               && !swipeUp.actions.contains(where: { if case .absolutePointer(_, _, buttons: 1) = $0 { return true }; return false }),
+               "Ending swipe lifts synthetic scroll contacts cleanly without stray click")
+
+        // 2-finger quick tap -> right-click at midpoint.
         _ = direct.touchesBegan(
             [
-                SillTouchSample(token: 41, location: CGPoint(x: 300, y: 300), previousLocation: CGPoint(x: 300, y: 300), timestamp: 6.0),
-                SillTouchSample(token: 42, location: CGPoint(x: 360, y: 300), previousLocation: CGPoint(x: 360, y: 300), timestamp: 6.0),
+                SillTouchSample(token: 41, location: CGPoint(x: 100, y: 50), previousLocation: CGPoint(x: 100, y: 50), timestamp: 11.0),
+                SillTouchSample(token: 42, location: CGPoint(x: 900, y: 650), previousLocation: CGPoint(x: 900, y: 650), timestamp: 11.0),
             ],
-            viewSize: viewSize, tapsClick: true, now: 6.0
+            viewSize: viewSize, screenRect: screenRect, tapsClick: true, now: 11.0
         )
-        let scMove = direct.touchesMoved(
-            [
-                SillTouchSample(token: 41, location: CGPoint(x: 300, y: 320), previousLocation: CGPoint(x: 300, y: 300), timestamp: 6.02),
-                SillTouchSample(token: 42, location: CGPoint(x: 360, y: 320), previousLocation: CGPoint(x: 360, y: 300), timestamp: 6.02),
-            ],
-            viewSize: viewSize, tapsClick: true, pointerSpeed: 1.0, scrollSpeed: 1.0, reverseScrolling: false, frameTimestamp: 6.02
-        )
-        expect(scMove.actions == [.mouseScroll(dx: 0, dy: 11)], "2-finger direct scroll emits scaled mouseScroll")
-        let revMove = direct.touchesMoved(
-            [
-                SillTouchSample(token: 41, location: CGPoint(x: 320, y: 320), previousLocation: CGPoint(x: 300, y: 320), timestamp: 6.04),
-                SillTouchSample(token: 42, location: CGPoint(x: 380, y: 320), previousLocation: CGPoint(x: 360, y: 320), timestamp: 6.04),
-            ],
-            viewSize: viewSize, tapsClick: true, pointerSpeed: 1.0, scrollSpeed: 1.0, reverseScrolling: true, frameTimestamp: 6.04
-        )
-        expect(revMove.actions == [.mouseScroll(dx: -11, dy: 0)], "reverseScrolling flips horizontal/vertical scroll sign")
+        let twoTapDirect = direct.touchesEnded([41, 42], tapsClick: true, tsMs: 11120, now: 11.12)
+        expect(twoTapDirect.actions.contains(.absolutePointer(x: 16384, y: 16384, buttons: 2)) && twoTapDirect.actions.contains(.absolutePointer(x: 16384, y: 16384, buttons: 0)),
+               "2-finger tap in direct mode right-clicks at midpoint")
 
-        // 5. SessionHUDPolicy hide and 4-finger reveal rules.
+        // 5. SessionHUDPolicy hide, reveal, and 4-finger toggle rules.
         var hidden = false
         var kb: SessionHUDPolicy.KeyboardPresentation = .sill
         SessionHUDPolicy.hideControls(controlsHidden: &hidden, keyboard: &kb)
@@ -198,7 +282,14 @@ struct SillControlsTests {
 
         var revealHint = true
         SessionHUDPolicy.revealControls(controlsHidden: &hidden, showRevealHint: &revealHint)
-        expect(!hidden && !revealHint, "4-finger reveal shows HUD and clears the reveal hint banner")
+        expect(!hidden && !revealHint, "Reveal shows HUD and clears the reveal hint banner")
+
+        kb = .sill
+        revealHint = true
+        let hidByToggle = SessionHUDPolicy.toggleControls(controlsHidden: &hidden, keyboard: &kb, showRevealHint: &revealHint)
+        expect(hidByToggle && kb == .none && !revealHint, "4-finger toggle hides visible HUD and dismisses keyboard")
+        let shownByToggle = SessionHUDPolicy.toggleControls(controlsHidden: &hidden, keyboard: &kb, showRevealHint: &revealHint)
+        expect(!shownByToggle && !hidden, "Second 4-finger toggle reveals hidden HUD")
 
         print("Sill controls: \(checks) checks passed")
     }

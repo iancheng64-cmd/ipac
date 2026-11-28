@@ -783,6 +783,14 @@ void hv_vm_touch_frame(uint32_t ts_ms) { hv_xhci_touch_frame(board.usb, ts_ms); 
 
 void hv_vm_touch_button(int down) { hv_xhci_touch_button(board.usb, down); }
 
+void hv_vm_absolute_pointer(int px, int py, int buttons) {
+    hv_xhci_absolute(board.usb, px, py, (unsigned)buttons);
+}
+
+void hv_vm_absolute_cancel(void) {
+    hv_xhci_absolute_cancel(board.usb);
+}
+
 int hv_vm_pointer(int *x, int *y) {
     HvPvgLite *pvg = atomic_load_explicit(&display_pvg, memory_order_acquire);
     const uint8_t *page = pvg ? hv_pvg_lite_display_page(pvg) : NULL;
