@@ -1,38 +1,28 @@
 import Foundation
 
-/// Policy for floating capsule HUD visibility, 5-second auto-hide, and 4-finger quick tap toggles.
+/// Policy for floating capsule HUD visibility and 4-finger reveal gesture.
 enum SessionHUDPolicy {
-    static let autoHideDelay: TimeInterval = 5.0
-    static let toastDuration: TimeInterval = 2.6
-
     enum KeyboardPresentation: Equatable {
         case none
         case sill
         case systemIME
     }
 
-    static func shouldAutoHide(
-        vmRunning: Bool,
-        fillsPhone: Bool,
-        controlsHidden: Bool,
-        keyboard: KeyboardPresentation,
-        showDetails: Bool,
-        confirmStop: Bool
-    ) -> Bool {
-        vmRunning && fillsPhone && !controlsHidden && keyboard == .none && !showDetails && !confirmStop
-    }
-
-    /// Toggles HUD visibility and closes any open virtual keyboard when hiding the HUD.
-    /// Returns the updated `controlsHidden` flag.
-    @discardableResult
-    static func onFourFingerTap(
+    /// Hides the HUD and dismisses any active virtual keyboard cleanly.
+    static func hideControls(
         controlsHidden: inout Bool,
         keyboard: inout KeyboardPresentation
-    ) -> Bool {
-        controlsHidden.toggle()
-        if controlsHidden {
-            keyboard = .none
-        }
-        return controlsHidden
+    ) {
+        controlsHidden = true
+        keyboard = .none
+    }
+
+    /// Reveals the HUD from the 4-finger tap gesture and clears the one-shot hint banner.
+    static func revealControls(
+        controlsHidden: inout Bool,
+        showRevealHint: inout Bool
+    ) {
+        controlsHidden = false
+        showRevealHint = false
     }
 }

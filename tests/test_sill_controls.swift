@@ -190,22 +190,15 @@ struct SillControlsTests {
         )
         expect(revMove.actions == [.mouseScroll(dx: -11, dy: 0)], "reverseScrolling flips horizontal/vertical scroll sign")
 
-        // 5. SessionHUDPolicy auto-hide and 4-finger toggle rules.
-        expect(SessionHUDPolicy.shouldAutoHide(vmRunning: true, fillsPhone: true, controlsHidden: false, keyboard: .none, showDetails: false, confirmStop: false),
-               "Auto-hides after 5s while running full-screen without overlays")
-        expect(!SessionHUDPolicy.shouldAutoHide(vmRunning: true, fillsPhone: true, controlsHidden: false, keyboard: .sill, showDetails: false, confirmStop: false),
-               "Does not auto-hide while Sill keyboard is open")
-        expect(!SessionHUDPolicy.shouldAutoHide(vmRunning: false, fillsPhone: true, controlsHidden: false, keyboard: .none, showDetails: false, confirmStop: false),
-               "Does not auto-hide before VM reaches running state")
-        expect(!SessionHUDPolicy.shouldAutoHide(vmRunning: true, fillsPhone: false, controlsHidden: false, keyboard: .none, showDetails: false, confirmStop: false),
-               "Does not auto-hide in portrait upright split mode")
-
+        // 5. SessionHUDPolicy hide and 4-finger reveal rules.
         var hidden = false
         var kb: SessionHUDPolicy.KeyboardPresentation = .sill
-        let becameHidden = SessionHUDPolicy.onFourFingerTap(controlsHidden: &hidden, keyboard: &kb)
-        expect(becameHidden && kb == .none, "4-finger hide also dismisses active Sill keyboard")
-        let stillHidden = SessionHUDPolicy.onFourFingerTap(controlsHidden: &hidden, keyboard: &kb)
-        expect(!stillHidden, "Second 4-finger tap reveals HUD")
+        SessionHUDPolicy.hideControls(controlsHidden: &hidden, keyboard: &kb)
+        expect(hidden && kb == .none, "Hiding controls dismisses active Sill keyboard")
+
+        var revealHint = true
+        SessionHUDPolicy.revealControls(controlsHidden: &hidden, showRevealHint: &revealHint)
+        expect(!hidden && !revealHint, "4-finger reveal shows HUD and clears the reveal hint banner")
 
         print("Sill controls: \(checks) checks passed")
     }

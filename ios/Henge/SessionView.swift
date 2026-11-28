@@ -42,9 +42,8 @@ struct SessionView: View {
     @State private var zoomed = false
     @State private var showDetails = false
     @State private var controlsHidden = false
-    @State private var toastMessage: String?
-    @State private var toastTask: Task<Void, Never>?
-    @State private var hudAutoHideTask: Task<Void, Never>?
+    @State private var showRevealHint = false
+    @AppStorage("henge.controls.hintsShown") private var revealHintsShown = 0
     @State private var pointerRefused = false
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
@@ -72,69 +71,15 @@ struct SessionView: View {
         )
     }
 
-    private func showToast(_ text: String) {
-        toastTask?.cancel()
-        toastMessage = text
-        toastTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(SessionHUDPolicy.toastDuration * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            toastMessage = nil
-        }
-    }
-
-    private func scheduleHudAutoHide(fillsPhone: Bool) {
-        hudAutoHideTask?.cancel()
-        guard SessionHUDPolicy.shouldAutoHide(
-            vmRunning: state == 1,
-            fillsPhone: fillsPhone,
-            controlsHidden: controlsHidden,
-            keyboard: keyboard,
-            showDetails: showDetails,
-            confirmStop: confirmStop
-        ) else {
-            return
-        }
-        hudAutoHideTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(SessionHUDPolicy.autoHideDelay * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            if SessionHUDPolicy.shouldAutoHide(
-                vmRunning: state == 1,
-                fillsPhone: fillsPhone,
-                controlsHidden: controlsHidden,
-                keyboard: keyboard,
-                showDetails: showDetails,
-                confirmStop: confirmStop
-            ) {
-                controlsHidden = true
-            }
-        }
-    }
-
-    private func toggleHudFromGesture(fillsPhone: Bool) {
+    private func revealControlsFromGesture() {
         var hidden = controlsHidden
-        var kb = keyboard
-        SessionHUDPolicy.onFourFingerTap(controlsHidden: &hidden, keyboard: &kb)
+        var hint = showRevealHint
+        SessionHUDPolicy.revealControls(controlsHidden: &hidden, showRevealHint: &hint)
         controlsHidden = hidden
-        keyboard = kb
-        if hidden {
-            sillKeyboard.releaseAll()
-            showToast(L10n.text("四指輕點螢幕可顯示或隱藏控制列（5 秒後自動隱藏）"))
-        } else {
-            scheduleHudAutoHide(fillsPhone: fillsPhone)
-        }
+        showRevealHint = hint
     }
 
-    private func toggleTouchMode(fillsPhone: Bool) {
-        let next: TrackpadTouchMode = touchMode == .trackpad ? .directPointer : .trackpad
-        touchModeRaw = next.rawValue
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        showToast(next == .trackpad
-                  ? L10n.text("已切換為 Sill 多指觸控板模式")
-                  : L10n.text("已切換為直接觸控指標模式"))
-        scheduleHudAutoHide(fillsPhone: fillsPhone)
-    }
-
-    private func toggleSillKeyboard(fillsPhone: Bool) {
+    private func toggleSillKeyboard() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if keyboard == .none {
             controlsHidden = false
@@ -143,7 +88,6 @@ struct SessionView: View {
             sillKeyboard.releaseAll()
             keyboard = .none
         }
-        scheduleHudAutoHide(fillsPhone: fillsPhone)
     }
 
     var body: some View {
@@ -196,7 +140,7 @@ struct SessionView: View {
                         pointerSpeed: mouseSpeed,
                         scrollSpeed: scrollSpeed,
                         reverseScrolling: reverseScrolling,
-                        onToggleHud: { toggleHudFromGesture(fillsPhone: layout.fillsPhone) }
+                        onToggleHud: revealControlsFromGesture
                     )
                     .frame(width: layout.touch.width, height: layout.touch.height)
                     .position(x: layout.touch.midX, y: layout.touch.midY)
@@ -227,7 +171,7 @@ struct SessionView: View {
                         .frame(width: full.width, height: full.height, alignment: .bottom)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    if pointerRefused && toastMessage == nil {
+                    if pointerRefused && !showRevealHint {
                         Label(L10n.text("請將 Henge 設為全螢幕，才能將觸控板或滑鼠交給虛擬 Mac 使用"), systemImage: "cursorarrow.rays")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
@@ -237,18 +181,17 @@ struct SessionView: View {
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }
-                    if let toastMessage {
-                        Text(toastMessage)
-                            .font(.system(size: 14, weight: .medium))
+                    if showRevealHint {
+                        Label(L10n.text("四指同時輕點螢幕即可顯示控制列"), systemImage: "hand.tap")
+                            .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 18).padding(.vertical, 10)
+                            .padding(.horizontal, 18).padding(.vertical, 12)
                             .deskGlass(in: Capsule())
-                            .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 0.5))
-                            .position(x: full.width / 2, y: insets.top + 44)
-                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                            .position(x: full.width / 2, y: insets.top + 40)
+                            .transition(.opacity)
                             .allowsHitTesting(false)
                     }
-                    if showWallpaperTip && toastMessage == nil && !pointerRefused {
+                    if showWallpaperTip && !showRevealHint && !pointerRefused {
                         Label(L10n.text("提示：在 Mac「系統設定」改用靜態純色桌布並將螢幕保護程式設為「永不」，可大幅提升流暢度。"), systemImage: "speedometer")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(.white)
@@ -281,7 +224,7 @@ struct SessionView: View {
             .animation(.easeInOut(duration: 0.24), value: zoomed)
             .animation(.spring(response: 0.30, dampingFraction: 0.88), value: keyboard)
             .animation(.easeInOut(duration: 0.22), value: controlsHidden)
-            .animation(.easeInOut(duration: 0.22), value: toastMessage)
+            .animation(.easeInOut(duration: 0.25), value: showRevealHint)
             .animation(.easeInOut(duration: 0.25), value: showWallpaperTip)
             .onReceive(NotificationCenter.default.publisher(for: UIPointerLockState.didChangeNotification)) { _ in
                 pointerRefused = PointerLock.refused
@@ -290,14 +233,8 @@ struct SessionView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { pointerRefused = PointerLock.refused }
             }
             .onReceive(NotificationCenter.default.publisher(for: Trackpad.revealTap)) { _ in
-                toggleHudFromGesture(fillsPhone: layout.fillsPhone)
+                revealControlsFromGesture()
             }
-            .onChange(of: state) { _ in scheduleHudAutoHide(fillsPhone: layout.fillsPhone) }
-            .onChange(of: controlsHidden) { _ in scheduleHudAutoHide(fillsPhone: layout.fillsPhone) }
-            .onChange(of: keyboard) { _ in scheduleHudAutoHide(fillsPhone: layout.fillsPhone) }
-            .onChange(of: showDetails) { _ in scheduleHudAutoHide(fillsPhone: layout.fillsPhone) }
-            .onChange(of: confirmStop) { _ in scheduleHudAutoHide(fillsPhone: layout.fillsPhone) }
-            .onChange(of: layout.fillsPhone) { fills in scheduleHudAutoHide(fillsPhone: fills) }
             .onAppear { shown = layout.shown }
             .onChange(of: layout.shown) { shown = $0 }
         }
@@ -345,8 +282,6 @@ struct SessionView: View {
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
-            hudAutoHideTask?.cancel()
-            toastTask?.cancel()
             zoomFollowing?.cancel()
             StickyKeys.shared.releaseAll()
             HardwareKeys.releaseAll()
@@ -447,15 +382,9 @@ struct SessionView: View {
             HStack {
                 tool("eye.slash", L10n.text("隱藏控制列")) { hideControls() }
                 Spacer()
-                tool("keyboard", L10n.text("鍵盤"), tint: Desk.text) { toggleSillKeyboard(fillsPhone: false) }
+                tool("keyboard", L10n.text("鍵盤"), tint: Desk.text) { toggleSillKeyboard() }
                 Spacer()
                 pasteTool
-                Spacer()
-                tool(
-                    touchMode == .trackpad ? "rectangle.and.hand.point.up.left" : "hand.point.up.left",
-                    touchMode == .trackpad ? L10n.text("Sill 多指觸控板") : L10n.text("直接觸控指標"),
-                    tint: touchMode == .directPointer ? Desk.accentLight : Desk.text
-                ) { toggleTouchMode(fillsPhone: false) }
                 Spacer()
                 tool("plus.magnifyingglass", L10n.text("放大檢視")) { zoomed = true }
                 Spacer()
@@ -463,14 +392,12 @@ struct SessionView: View {
                 Spacer()
                 tool("power", L10n.text("關機"), tint: Desk.bad) { stopTapped() }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 22)
             .frame(width: layout.pad.width, height: 54)
             .background(Desk.card, in: Capsule())
             .overlay(Capsule().stroke(Desk.hairline, lineWidth: 0.5))
             .position(x: layout.pad.midX, y: layout.toolsY + 27)
             .transition(.opacity)
-        } else if controlsHidden && keyboard == .none {
-            hudMicroHandle(layout)
         }
         trackpadPanel(layout)
     }
@@ -484,7 +411,7 @@ struct SessionView: View {
                     pointerSpeed: mouseSpeed,
                     scrollSpeed: scrollSpeed,
                     reverseScrolling: reverseScrolling,
-                    onToggleHud: { toggleHudFromGesture(fillsPhone: layout.fillsPhone) }
+                    onToggleHud: revealControlsFromGesture
                 )
                 if compact {
                     Text(touchMode == .trackpad ? L10n.text("Sill 觸控板") : L10n.text("直接觸控"))
@@ -529,12 +456,18 @@ struct SessionView: View {
         .tint(Desk.raised)
     }
 
-    /// Hides the session's controls; four fingers or the top micro-handle bring them back.
+    /// Hides the session's controls; four fingers bring them back.
     private func hideControls() {
-        controlsHidden = true
+        var hidden = controlsHidden
+        var kb = keyboard
+        SessionHUDPolicy.hideControls(controlsHidden: &hidden, keyboard: &kb)
+        controlsHidden = hidden
+        keyboard = kb
         sillKeyboard.releaseAll()
-        keyboard = .none
-        showToast(L10n.text("四指輕點螢幕可顯示或隱藏控制列（5 秒後自動隱藏）"))
+        guard revealHintsShown < 3 else { return }
+        revealHintsShown += 1
+        showRevealHint = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showRevealHint = false }
     }
 
     private func tool(_ symbol: String, _ label: String, tint: Color = Desk.text, highlighted: Bool = false, action: @escaping () -> Void) -> some View {
@@ -549,25 +482,6 @@ struct SessionView: View {
         .accessibilityLabel(L10n.text(label))
     }
 
-    private func hudMicroHandle(_ layout: Layout) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            controlsHidden = false
-            scheduleHudAutoHide(fillsPhone: layout.fillsPhone)
-        } label: {
-            Capsule()
-                .fill(Color.white.opacity(0.62))
-                .frame(width: 68, height: 5)
-                .overlay(Capsule().stroke(Color.black.opacity(0.28), lineWidth: 0.5))
-                .frame(width: 96, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(L10n.text("顯示控制列"))
-        .position(x: layout.full.width / 2, y: max(layout.insets.top + 12, 22))
-        .transition(.opacity)
-    }
-
     // MARK: Filling the phone
 
     @ViewBuilder private func floatingControls(_ layout: Layout) -> some View {
@@ -575,40 +489,31 @@ struct SessionView: View {
         let top = layout.insets.top + (landscape ? 8 : 6)
         let pill = HStack(spacing: 2) {
             tool("eye.slash", L10n.text("隱藏控制列"), tint: .white) { hideControls() }
-            tool("keyboard", L10n.text("Sill 視覺鍵盤"), tint: .white, highlighted: keyboard != .none) {
-                toggleSillKeyboard(fillsPhone: layout.fillsPhone)
+            tool("keyboard", L10n.text("鍵盤"), tint: .white, highlighted: keyboard != .none) {
+                toggleSillKeyboard()
             }
             pasteTool
-            tool(
-                touchMode == .trackpad ? "rectangle.and.hand.point.up.left" : "hand.point.up.left",
-                touchMode == .trackpad ? L10n.text("Sill 多指觸控板") : L10n.text("直接觸控指標"),
-                tint: touchMode == .directPointer ? Desk.accentLight : .white
-            ) {
-                toggleTouchMode(fillsPhone: layout.fillsPhone)
-            }
             tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? L10n.text("恢復檢視") : L10n.text("放大檢視"), tint: zoomed ? Desk.accentLight : .white) {
                 zoomed.toggle()
-                scheduleHudAutoHide(fillsPhone: layout.fillsPhone)
             }
             tool("info.circle", L10n.text("詳細資訊"), tint: .white) { showDetails = true }
-            Rectangle().fill(Color.white.opacity(0.28)).frame(width: 1, height: 22).padding(.horizontal, 3)
+            Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 22).padding(.horizontal, 4)
             tool("power", L10n.text("關機"), tint: Desk.bad) { stopTapped() }
         }
         .padding(.horizontal, 8)
         .frame(height: 50)
         .deskGlass(in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.24), lineWidth: 0.5))
-        if controlsHidden {
-            hudMicroHandle(layout)
-        } else if let barY = layout.barY {
-            pill.position(x: layout.touch.midX, y: barY)
-                .transition(.move(edge: .top).combined(with: .opacity))
-        } else if landscape || keyboard != .none {
-            pill.position(x: layout.touch.midX, y: top + 25)
-                .transition(.move(edge: .top).combined(with: .opacity))
-        } else {
-            pill.position(x: layout.touch.midX, y: layout.touch.height - layout.insets.bottom - 34)
-                .transition(.move(edge: .top).combined(with: .opacity))
+        if !controlsHidden {
+            if let barY = layout.barY {
+                pill.position(x: layout.touch.midX, y: barY)
+                    .transition(.opacity)
+            } else if landscape || keyboard != .none {
+                pill.position(x: layout.touch.midX, y: top + 25)
+                    .transition(.opacity)
+            } else {
+                pill.position(x: layout.touch.midX, y: layout.touch.height - layout.insets.bottom - 34)
+                    .transition(.opacity)
+            }
         }
         if zoomed { zoomMap(layout) }
     }
@@ -831,7 +736,7 @@ struct SessionView: View {
         controlsHidden = false
         keyboard = .none
         sillKeyboard.releaseAll()
-        toastMessage = nil
+        showRevealHint = false
         zoomCentre = CGPoint(x: 0.5, y: 0.5)
         map = nil
         showWallpaperTip = false
@@ -945,7 +850,6 @@ struct SessionView: View {
                 keyboard = .none
                 showDetails = false
                 confirmStop = false
-                hudAutoHideTask?.cancel()
                 zoomFollowing?.cancel()
                 StickyKeys.shared.releaseAll()
                 sillKeyboard.releaseAll()
