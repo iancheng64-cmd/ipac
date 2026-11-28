@@ -39,6 +39,8 @@ static void knobs_init(void) {
        entries stale, not just the incoming one's). It was worth ~3% on a process-spawn loop; not worth guest memory. */
     if (!getenv("HV_IJC_PAGES")) hv_knob[HV_K_IJCPAGES] = 1;
     if (!getenv("HV_DNS_PROXY")) hv_knob[HV_K_DNSPROXY] = 1;
+    hv_knob[HV_K_HOIST] = getenv("HV_HOIST_CHECK") ? atoi(getenv("HV_HOIST_CHECK")) : 1;
+    hv_knob[HV_K_RANGEDROP] = getenv("HV_RANGE_DROP") ? atoi(getenv("HV_RANGE_DROP")) : 128;
 }
 
 int hv_knob_set(HvMachine *m, const char *name, int value) {
@@ -92,7 +94,8 @@ static int init_rest(HvMachine *m) {
     /* On unless asked: the Mac bench (2026-11-08) posted 130-400 raced remote drops/s with it against 710-1370
        without (most walks a drop met were of other pages), and the phone's login storm waits up to 24% of a CPU. */
     hv_knob[HV_K_WALKLOG] = getenv("HV_WALK_LOG") ? atoi(getenv("HV_WALK_LOG")) : 1;
-    if (getenv("HV_HOIST_CHECK")) hv_knob[HV_K_HOIST] = atoi(getenv("HV_HOIST_CHECK"));
+    hv_knob[HV_K_HOIST] = getenv("HV_HOIST_CHECK") ? atoi(getenv("HV_HOIST_CHECK")) : 1;
+    hv_knob[HV_K_RANGEDROP] = getenv("HV_RANGE_DROP") ? atoi(getenv("HV_RANGE_DROP")) : 128;
     /* On unless asked: a code change used to drop every CPU's whole branch cache (~100/s with JavaScriptCore's JIT
        on the Mac bench, 300-390K refills/s after); now only the page's targets (Mac 2026-11-09: resets 195 -> 2/s,
        a JIT check of 200 recompiled functions correct; bench times the same within noise). */

@@ -25,8 +25,8 @@ struct SettingsView: View {
     @AppStorage(EngineTuning.fastFlushKey) private var fastFlush = true
     @AppStorage(EngineTuning.pCoreQosKey) private var pCoreQos = false
     @AppStorage(EngineTuning.wfiSpinKey) private var wfiSpin = false
-    @AppStorage(EngineTuning.superblocksKey) private var superblocks = false
-    @AppStorage(EngineTuning.compactJitMetadataKey) private var compactJitMetadata = false
+    @AppStorage(EngineTuning.superblocksKey) private var superblocks = true
+    @AppStorage(EngineTuning.compactJitMetadataKey) private var compactJitMetadata = (ProcessInfo.processInfo.physicalMemory < (10_000 << 20))
     @AppStorage(JITBootstrap.codeCacheKey) private var codeCacheMB = JITBootstrap.defaultCodeCacheMB
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
     @AppStorage(AppLanguage.storageKey) private var interfaceLanguage = AppLanguage.current.rawValue

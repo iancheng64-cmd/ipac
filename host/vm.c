@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include <mach/mach_time.h>
 #include "usb_host.h"
 #include <stdlib.h>
 #include <string.h>
@@ -344,9 +345,31 @@ void hv_vm_destroy(void) {
 
 static void *kicker_thread(void *unused) {
     (void)unused;
+    uint32_t tick = 0;
     while (!atomic_load(&kicker_stopped)) {
         usleep(1000);
-        hv_machine_kick_all(&m);
+        if (m.big_lock_on || (++tick & 15) == 0) {
+            hv_machine_kick_all(&m);
+            continue;
+        }
+        uint64_t now = mach_absolute_time();
+        int kicked_any = 0;
+        if (m.cpus[0] && __atomic_load_n(&m.percpu[0].active, __ATOMIC_RELAXED)) {
+            __atomic_store_n(&m.cpus[0]->exit_req, 1, __ATOMIC_SEQ_CST);
+            kicked_any = 1;
+        }
+        for (int i = 1; i < m.ncpus; i++) {
+            if (!m.cpus[i] || !__atomic_load_n(&m.percpu[i].active, __ATOMIC_RELAXED)) continue;
+            uint64_t due = __atomic_load_n(&m.cpus[i]->timer_due, __ATOMIC_RELAXED);
+            if (due && now >= due) {
+                __atomic_store_n(&m.cpus[i]->exit_req, 1, __ATOMIC_SEQ_CST);
+                kicked_any = 1;
+            }
+        }
+        if (kicked_any) {
+            if (m.stats_interval) m.stats.kick_src[2]++;
+            __asm__ volatile("sev" ::: "memory");
+        }
     }
     return NULL;
 }

@@ -26,9 +26,9 @@ int hv_disk_open(HvDisk *d, const char *path, uint64_t offset, int readonly) {
     d->readonly = readonly;
     (void)fcntl(d->fd, F_RDAHEAD, 1);
 #if TARGET_OS_IPHONE
-    /* Avoid duplicating multi-GB disk.img blocks inside iPadOS UBC page cache alongside guest RAM. */
-    const char *dc = getenv("HV_DISK_CACHE");
-    if (!(dc && atoi(dc) > 0)) {
+    /* Keep host UBC active by default so reads/writes benefit from kernel caching; opt into F_NOCACHE only via HV_DISK_NOCACHE=1. */
+    const char *nc = getenv("HV_DISK_NOCACHE");
+    if (nc && atoi(nc) > 0) {
         (void)fcntl(d->fd, F_NOCACHE, 1);
     }
 #endif

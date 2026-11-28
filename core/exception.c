@@ -82,22 +82,42 @@ void hv_raise_undef(HvCpu *cpu, uint64_t pc) {
     static int reported;
     if (cpu->el == 0 && ((pc >> 55) & 1) && reported++ < 3) hv_debug_el0_in_kernel(cpu, "undef");
     if (cpu->m->log) {
+        static uint32_t undef_logged;
+        static uint64_t last_undef_key;
         uint32_t insn = 0;
         uint64_t pa;
         if (!hv_mmu_access(cpu, pc, HV_ACC_EXEC, cpu->el, &pa)) hv_phys_read(cpu->m, pa, &insn, 4);
-        fprintf(stderr, "undefined: pc %llx insn %08x el%u\n", (unsigned long long)pc, insn, cpu->el);
-        if (cpu->el == 1) { /* a kernel assert: its backtrace, from the frame pointers (lr first) */
-            fprintf(stderr, "  backtrace: lr %llx", (unsigned long long)(cpu->x[30] | 0xffffff8000000000ull));
-            uint64_t fp = cpu->x[29];
-            for (int i = 0; i < 24 && fp; i++) {
-                uint64_t fr[2], fpa;
-                if (hv_mmu_access(cpu, fp, HV_ACC_READ, 1, &fpa) || hv_phys_read(cpu->m, fpa, fr, 16)) break;
-                uint64_t ret = fr[1] | 0xffffff8000000000ull; /* strip the PAC bits */
-                fprintf(stderr, " %llx", (unsigned long long)ret);
-                if (fr[0] <= fp) break;
-                fp = fr[0];
+        uint64_t key = pc ^ ((uint64_t)insn << 32) ^ (uint64_t)cpu->el;
+        int should_log = cpu->m->log >= 2;
+        if (!should_log) {
+            uint64_t prev = __atomic_exchange_n(&last_undef_key, key, __ATOMIC_RELAXED);
+            if (prev != key && __atomic_fetch_add(&undef_logged, 1, __ATOMIC_RELAXED) < 8)
+                should_log = 1;
+        }
+        if (should_log) {
+            char buf[1024];
+            size_t cap = sizeof buf;
+            int pos = snprintf(buf, cap, "undefined: pc %llx insn %08x el%u\n",
+                               (unsigned long long)pc, insn, cpu->el);
+            if (pos < 0) pos = 0;
+            if (cpu->el == 1 && (size_t)pos < cap) { /* a kernel assert: its backtrace, from the frame pointers (lr first) */
+                int n = snprintf(buf + pos, cap - (size_t)pos, "  backtrace: lr %llx",
+                                 (unsigned long long)(cpu->x[30] | 0xffffff8000000000ull));
+                if (n > 0) pos += (size_t)(pos + n) < cap ? n : (int)(cap - (size_t)pos - 1);
+                uint64_t fp = cpu->x[29];
+                for (int i = 0; i < 24 && fp && (size_t)pos < cap; i++) {
+                    uint64_t fr[2], fpa;
+                    if (hv_mmu_access(cpu, fp, HV_ACC_READ, 1, &fpa) || hv_phys_read(cpu->m, fpa, fr, 16)) break;
+                    uint64_t ret = fr[1] | 0xffffff8000000000ull; /* strip the PAC bits */
+                    n = snprintf(buf + pos, cap - (size_t)pos, " %llx", (unsigned long long)ret);
+                    if (n > 0) pos += (size_t)(pos + n) < cap ? n : (int)(cap - (size_t)pos - 1);
+                    if (fr[0] <= fp) break;
+                    fp = fr[0];
+                }
+                if ((size_t)pos < cap)
+                    snprintf(buf + pos, cap - (size_t)pos, "\n  vbar %llx\n", (unsigned long long)cpu->vbar_el1);
             }
-            fprintf(stderr, "\n  vbar %llx\n", (unsigned long long)cpu->vbar_el1);
+            fputs(buf, stderr);
         }
     }
     hv_raise_sync(cpu, HV_EC_UNKNOWN, 0, 0, pc);
@@ -205,10 +225,13 @@ static uint64_t psci(HvCpu *cpu, uint64_t fn) {
         cpu->x[2] = 0x524f50; /* the values only name keys, and no key is ever used */
         cpu->x[3] = 0x4a4f50;
         return 0;
-    default:
-        if (cpu->m->log) fprintf(stderr, "hengevm: unknown hypervisor call %#llx (x1 %#llx) at el%u\n",
-                                 (unsigned long long)fn, (unsigned long long)cpu->x[1], cpu->el);
+    default: {
+        static uint32_t hvc_logged;
+        if (cpu->m->log && (cpu->m->log >= 2 || __atomic_fetch_add(&hvc_logged, 1, __ATOMIC_RELAXED) < 8))
+            fprintf(stderr, "hengevm: unknown hypervisor call %#llx (x1 %#llx) at el%u\n",
+                    (unsigned long long)fn, (unsigned long long)cpu->x[1], cpu->el);
         return (uint64_t)-1;                                 /* NOT_SUPPORTED */
+    }
     }
 }
 

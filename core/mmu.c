@@ -165,8 +165,12 @@ static uint32_t hint_slot(uint64_t key) {
 static void ijc_clear(HvCpu *cpu, int kernel) {
     if (!cpu->pc_state) return;
     memset(cpu->pc_state->ijc_hint[kernel], 0, sizeof cpu->pc_state->ijc_hint[kernel]);
-    for (int t = kernel; t < HV_IJC_TABLES; t += 2)
+    uint32_t used = cpu->pc_state->ijc_tables_used;
+    for (int t = kernel; t < HV_IJC_TABLES; t += 2) {
+        if (!(used >> t & 1)) continue;
         memset(cpu->pc_state->ijc + (size_t)t * (HV_IJC_TABLE_BYTES / 8), 0, HV_IJC_TABLE_BYTES);
+        cpu->pc_state->ijc_tables_used &= ~(1u << t);
+    }
 }
 
 /* ASIDs live in TTBR0 unless TCR.A1 puts them in TTBR1; then every process looks alike to us. */

@@ -91,7 +91,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
     - **Sill 多指觸控板模式**：原生 Magic Trackpad 2 兩指捲動／縮放，並支援 **Mac 原生三指拖曳（Three-Finger Drag）**、單指輕點左鍵與雙指輕點右鍵。
     - **Sill 手勢觸控模式**：透過獨立 USB 絕對座標指標裝置達成與 Sill 全螢幕完全一致的操作——點哪裡按哪裡、長按右鍵、長按後拖曳一對一跟著手指移動、單指或雙指滑動平滑捲動、雙指輕點右鍵。
   - **Apple 懸浮可調大小雙語鍵盤**：開啟時不再縮小或重排 macOS 畫面，可拖曳頂端把手自由移動（雙擊重置）、拖曳右下角縮放手把或點選 `A-` / `A+`（與雙指縮放）自由調整大小，並可隨時收起；支援台灣 Apple 鍵盤 **注音（ㄅㄆㄇ）與 ABC 雙語鍵帽**（`🌐` 同步送出 `⌃Space`）、內嵌 **`中文組字`** 列直接用 iPadOS 注音／手寫送出繁體中文，與完整 SF Symbols 修飾鍵／倒 T 方向鍵。
-- **高效能記憶體與磁碟 I/O 調校（v0.6.0）**：在 8 GB 以下 M1/iPad 裝置自動平衡 4 P-core vCPU 與 512 MB JIT 快取（避開 245 秒後 SWAP 崖降）、對映像檔啟用 `F_RDAHEAD`＋iOS `F_NOCACHE` 與高優先權 NVMe 背景工作執行緒，並預設開啟 Superblocks。
+- **高效能引擎與低延遲調校（v0.6.1）**：在 ≤ 8 GB M1 裝置預設保留 `1 GB` JIT 快取＋緊湊中繼資料（節省約 161 MB）、`6` 核心安全並發排程、完整主機磁碟頁快取與 `F_RDAHEAD`；並整合稀疏分支快取清除、無緩衝同步日誌限流、智慧 `kicker` 喚醒、`HV_HOIST_CHECK=1`、`HV_RANGE_DROP=128` 與 `HV_WFI_SPIN=20`。
 - **剪貼簿與共享資料夾**：在 Mac 終端機執行自動輸入的安裝指令（`curl -s http://10.0.2.4/.henge/install | sh`）並按 Return 後，「檔案 › iPac / Henge › Shared」即同步至 Mac 家目錄的 `Henge` 資料夾；Mac 複製文字自動同步至 iPad，iPad 複製文字後點選上方控制列第三顆貼上鈕即可貼入 Mac。
 - **外接螢幕支援**：連接 USB-C / HDMI 顯示器會自動雙螢幕分工，外接螢幕顯示 macOS 畫面，iPad 保留觸控板與鍵盤控制。
 
@@ -99,7 +99,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
 ## 安裝與下載
 
-直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.6.0-build119.ipa`。
+直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.6.1-build120.ipa`。
 
 ### 系統需求
 

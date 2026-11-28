@@ -24,7 +24,13 @@ enum EngineTuning {
 
     static func apply(defaults d: UserDefaults = .standard, documents: URL? = nil) {
         var env = defaults
+#if os(iOS)
+        let defaultCompact = ProcessInfo.processInfo.physicalMemory < (10_000 << 20)
+        let compactOn = (d.object(forKey: compactJitMetadataKey) as? Bool) ?? defaultCompact
+        env["HV_COMPACT_JIT_METADATA"] = compactOn ? "1" : "0"
+#else
         env["HV_COMPACT_JIT_METADATA"] = d.bool(forKey: compactJitMetadataKey) ? "1" : "0"
+#endif
         if [30, 120].contains(d.integer(forKey: refreshKey)) {
             let requestedHz = d.integer(forKey: refreshKey)
             if requestedHz == 120 && Device.maxDisplayRefreshHz < 120 {
@@ -35,11 +41,16 @@ enum EngineTuning {
             }
         }
         if (d.object(forKey: superblocksKey) as? Bool) ?? true { env["HV_SUPERBLOCKS"] = "1" } else { unsetenv("HV_SUPERBLOCKS") }
-        if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
 #if os(iOS)
+        if d.bool(forKey: wfiSpinKey) {
+            env["HV_WFI_SPIN"] = "50"
+        } else if d.object(forKey: wfiSpinKey) == nil {
+            env["HV_WFI_SPIN"] = "20"
+        }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
         else if d.object(forKey: fastFlushKey) == nil { env["HV_FLUSH"] = "1" }
 #else
+        if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
 #endif
         if d.bool(forKey: pCoreQosKey) { env["HV_QOS"] = "ui" }

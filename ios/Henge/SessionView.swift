@@ -770,7 +770,7 @@ struct SessionView: View {
     }
 
     private func applyHostHeat(_ state: ProcessInfo.ThermalState) {
-        let high = state != .nominal
+        let high = state == .serious || state == .critical
         henge_vm_set_host_thermal_pressure(high ? 1 : 0)
         thermalState = state
         HengeLog.log("session", "thermal state: \(Self.thermalLabel(state))")
@@ -873,11 +873,12 @@ struct SessionView: View {
             }
         } else {
             let bootCPUCount: Int
+            let safeCap = Device.maxSafeCPUs
             if Device.physicalMemoryGB <= 8,
                ProcessInfo.processInfo.environment["HV_ALLOW_ALL_CPUS"] == nil,
-               activeCPUs > 4 {
-                bootCPUCount = 4
-                HengeLog.log("session", "balancing vCPUs \(activeCPUs) -> 4 P-cores for smoother GPU & I/O on \(Device.physicalMemoryGB) GB host")
+               activeCPUs > safeCap {
+                bootCPUCount = safeCap
+                HengeLog.log("session", "balancing vCPUs \(activeCPUs) -> \(safeCap) cores to reserve host headroom for Metal GPU & I/O")
             } else {
                 bootCPUCount = activeCPUs
             }

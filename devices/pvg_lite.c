@@ -220,7 +220,7 @@ static void display_swap(HvPvgLite *p, uint64_t mapping, const uint32_t *args) {
     if (!d) return;
     memcpy(d + 0xf80, args + 4, 16); /* gamma table offset, length */
     memcpy(d + 0xf90, args + 8, 8);  /* gamma entries, sum */
-    {   /* m4 fork: say what the gamma table is whenever it changes (colour is washed out without it) */
+    if (p->log || getenv("HV_COLOR_PROBE")) { /* m4 fork: say what the gamma table is whenever it changes (colour is washed out without it) */
         static uint32_t last[6];
         if (memcmp(last, args + 4, sizeof last)) {
             memcpy(last, args + 4, sizeof last);

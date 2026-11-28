@@ -288,7 +288,8 @@ static void *fast_resume(HvCpu *cpu) {
         return NULL;
     }
     if ((p->irq_line && !(cpu->daif & HV_PSTATE_I)) || (p->fiq_line && !(cpu->daif & HV_PSTATE_F))) { if (m->stats_interval) m->stats.fr_fail[2]++; return NULL; }
-    if (cpu->timer_due && mach_absolute_time() >= cpu->timer_due) { if (m->stats_interval) m->stats.fr_fail[3]++; return NULL; }
+    uint64_t due = __atomic_load_n(&cpu->timer_due, __ATOMIC_RELAXED);
+    if (due && mach_absolute_time() >= due) { if (m->stats_interval) m->stats.fr_fail[3]++; return NULL; }
     uint32_t flags = block_flags(cpu);
     int kernel = flags & HV_BLOCK_EL1;
     uint64_t va = cpu->pc;
@@ -968,7 +969,7 @@ static int run_loop(HvCpu *cpu, int one) {
         if (m->tick && (kicked || (++since_tick >= 64 && (since_tick = 0, next_due && mach_absolute_time() >= next_due)))) {
             since_tick = 0;
             next_due = m->tick(m, cpu);
-            cpu->timer_due = next_due;
+            __atomic_store_n(&cpu->timer_due, next_due, __ATOMIC_RELAXED);
         }
         int why = pending_chain ? 0 : kicked ? 1 : last_reason != HV_EXIT_BRANCH ? 2 : 5;
         if (hv_check_interrupts(cpu)) {

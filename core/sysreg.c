@@ -159,8 +159,10 @@ static int read_reg(HvCpu *cpu, uint32_t reg, uint64_t *v) {
        kernel reads error-status registers there (S3_6_C15_C0_0, S3_3_C15_C8_0..)
        when it reports a machine error; zero means no error recorded. */
     if ((reg >> 14) == 3 && ((reg >> 7) & 15) == 15) {
-        if (m->log) fprintf(stderr, "hengevm: read of implementation-defined S3_%u_C15_C%u_%u = 0\n", (reg >> 11) & 7,
-                            (reg >> 3) & 15, reg & 7);
+        static uint32_t impdef_rd_logged;
+        if (m->log && (m->log >= 2 || __atomic_fetch_add(&impdef_rd_logged, 1, __ATOMIC_RELAXED) < 8))
+            fprintf(stderr, "hengevm: read of implementation-defined S3_%u_C15_C%u_%u = 0\n", (reg >> 11) & 7,
+                    (reg >> 3) & 15, reg & 7);
         *v = 0;
         return 0;
     }
@@ -252,7 +254,7 @@ static int write_reg(HvCpu *cpu, uint32_t reg, uint64_t v) {
     }
     /* Timer outputs follow their registers at once, as in hardware: a masked
        timer must drop its line before the handler's EOI. */
-    if (m->tick) m->tick(m, cpu);
+    if (m->tick) __atomic_store_n(&cpu->timer_due, m->tick(m, cpu), __ATOMIC_RELAXED);
     return 0;
 other:
     /* PAuth key registers (CRn 2, CRm 1..3): kept, never used, since signing is a no-op. */
@@ -268,8 +270,10 @@ other:
     if ((reg >> 14) == 2 || (((reg >> 7) & 15) == 9 && (reg >> 14) == 3)) return 0;
     /* Apple implementation-defined registers (op0 3, CRn 15): ignored, see read_reg. */
     if ((reg >> 14) == 3 && ((reg >> 7) & 15) == 15) {
-        if (m->log) fprintf(stderr, "hengevm: write to implementation-defined S3_%u_C15_C%u_%u ignored\n", (reg >> 11) & 7,
-                            (reg >> 3) & 15, reg & 7);
+        static uint32_t impdef_wr_logged;
+        if (m->log && (m->log >= 2 || __atomic_fetch_add(&impdef_wr_logged, 1, __ATOMIC_RELAXED) < 8))
+            fprintf(stderr, "hengevm: write to implementation-defined S3_%u_C15_C%u_%u ignored\n", (reg >> 11) & 7,
+                    (reg >> 3) & 15, reg & 7);
         return 0;
     }
     return -1;
