@@ -29,6 +29,12 @@ struct SillControlsTests {
                 expect(code > 0 && code < 256, "Shortcut code \(code) valid")
             }
         }
+        expect(SillKeyboardLayout.zhuyinMap.count == 41, "All 41 standard Taiwan Zhuyin keys mapped")
+        expect(SillKeyboardLayout.zhuyinLegend(for: SillLinuxKey.q) == "ㄆ"
+               && SillKeyboardLayout.zhuyinLegend(for: SillLinuxKey.one) == "ㄅ"
+               && SillKeyboardLayout.zhuyinLegend(for: SillLinuxKey.slash) == "ㄥ",
+               "Zhuyin legends match standard Apple Taiwan keyboard")
+        expect(SillKeyboardInputMode.zhuyin != SillKeyboardInputMode.english, "Input modes distinguish Zhuyin and English")
 
         // 2. Sticky modifiers, Caps Lock, hold-repeat, shortcut isolation, and releaseAll.
         var keyEvents: [(UInt16, Bool)] = []

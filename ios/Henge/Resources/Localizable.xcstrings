@@ -11510,6 +11510,40 @@
         }
       }
     },
+    "中文組字": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chinese IME"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中文組字"
+          }
+        }
+      }
+    },
+    "用 iPad 注音／手寫輸入中文…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compose Chinese with iPad IME…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 iPad 注音／手寫輸入中文…"
+          }
+        }
+      }
+    },
     "送出": {
       "extractionState": "manual",
       "localizations": {

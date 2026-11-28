@@ -54,7 +54,11 @@ struct KeyboardCatcher: UIViewRepresentable {
 
         /// Called often, which also takes the keyboard back after a sheet has had it.
         func takeKeyboard() {
-            guard let window, window.rootViewController?.presentedViewController == nil else { return }
+            guard let window else { return }
+            if !typing && typer.isFirstResponder {
+                typer.resignFirstResponder()
+            }
+            guard window.rootViewController?.presentedViewController == nil else { return }
             let holder: UIView = typing ? typer : listener
             if !holder.isFirstResponder { holder.becomeFirstResponder() }
         }
@@ -107,7 +111,11 @@ struct KeyboardCatcher: UIViewRepresentable {
 
         func insertText(_ text: String) {
             guard !HardwareKeys.keyJustPressed else { return }
-            for c in text { Keys.type(c) }
+            if text.allSatisfy({ Keys.canTypeDirectly($0) }) {
+                for c in text { Keys.type(c) }
+            } else {
+                Sharing.paste(text)
+            }
             StickyKeys.shared.releaseAll()
         }
 
@@ -168,6 +176,12 @@ enum Keys {
             type(c)
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
+    }
+
+    static func canTypeDirectly(_ c: Character) -> Bool {
+        if letters[c] != nil { return true }
+        if let lower = c.lowercased().first, letters[lower] != nil { return true }
+        return plain[c] != nil || shifted[c] != nil
     }
 
     static func type(_ c: Character) {

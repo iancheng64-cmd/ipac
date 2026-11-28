@@ -1,5 +1,6 @@
 #include "virtio_blk.h"
 
+#include <pthread/qos.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
@@ -141,6 +142,7 @@ static uint64_t now_us(void) {
    after it starts until it is done, so their ordering meaning holds. */
 static void *worker(void *opaque) {
     HvVirtioBlk *b = opaque;
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
     /* HV_BLK_STATS: requests, bytes, flushes and how busy this worker was, every 10 s. */
     int stats = getenv("HV_BLK_STATS") != NULL;
     uint64_t every = stats && atoi(getenv("HV_BLK_STATS")) > 0 ? (uint64_t)atoi(getenv("HV_BLK_STATS")) * 1000000 : 10000000;
@@ -157,7 +159,7 @@ static void *worker(void *opaque) {
         HvVblkReq *r = &b->ring[b->claimed % HV_VBLK_RING];
         uint32_t type = 0;
         hv_virtq_read(&b->vio, &r->e, 0, &type, 4);
-        int fence = type == T_FLUSH || type == T_APPLE_BARRIER;
+        int fence = (type == T_FLUSH && hv_knob[HV_K_FLUSH] != 1) || type == T_APPLE_BARRIER;
         b->claimed++;
         if (fence) {
             b->fence = 1;

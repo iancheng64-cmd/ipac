@@ -107,8 +107,8 @@ struct SessionView: View {
                 insets: insets,
                 landscape: landscape,
                 zoomed: zoomed,
-                typing: keyboard != .none,
-                sillKeyboardOpen: keyboard == .sill,
+                typing: keyboard == .systemIME,
+                sillKeyboardOpen: false,
                 centre: zoomCentre,
                 aspect: mac.aspect
             )
@@ -157,11 +157,6 @@ struct SessionView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .allowsHitTesting(false)
                     }
-                    if !layout.fillsPhone {
-                        uprightControls(layout)
-                    } else {
-                        floatingControls(layout)
-                    }
                     if keyboard == .sill {
                         SillVirtualKeyboardView(
                             controller: sillKeyboard,
@@ -174,8 +169,15 @@ struct SessionView: View {
                                 keyboard = .none
                             }
                         )
-                        .frame(width: full.width, height: full.height, alignment: .bottom)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .frame(width: full.width, height: full.height)
+                        .zIndex(5)
+                    }
+                    if !layout.fillsPhone {
+                        uprightControls(layout)
+                            .zIndex(10)
+                    } else {
+                        floatingControls(layout)
+                            .zIndex(10)
                     }
                     if pointerRefused && !showRevealHint {
                         Label(L10n.text("請將 Henge 設為全螢幕，才能將觸控板或滑鼠交給虛擬 Mac 使用"), systemImage: "cursorarrow.rays")
@@ -228,7 +230,6 @@ struct SessionView: View {
             .frame(width: full.width, height: full.height)
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 0.24), value: zoomed)
-            .animation(.spring(response: 0.30, dampingFraction: 0.88), value: keyboard)
             .animation(.easeInOut(duration: 0.22), value: controlsHidden)
             .animation(.easeInOut(duration: 0.25), value: showRevealHint)
             .animation(.easeInOut(duration: 0.25), value: showWallpaperTip)
@@ -769,7 +770,7 @@ struct SessionView: View {
     }
 
     private func applyHostHeat(_ state: ProcessInfo.ThermalState) {
-        let high = state == .serious || state == .critical
+        let high = state != .nominal
         henge_vm_set_host_thermal_pressure(high ? 1 : 0)
         thermalState = state
         HengeLog.log("session", "thermal state: \(Self.thermalLabel(state))")
@@ -871,17 +872,29 @@ struct SessionView: View {
                 return
             }
         } else {
-            rc = henge_vm_boot(liveMac.rom.path, liveMac.disk.path, liveMac.aux.path, liveMac.ecid, liveMac.seed, ram, Int32(activeCPUs), &buffer, buffer.count)
+            let bootCPUCount: Int
+            if Device.physicalMemoryGB <= 8,
+               ProcessInfo.processInfo.environment["HV_ALLOW_ALL_CPUS"] == nil,
+               activeCPUs > 4 {
+                bootCPUCount = 4
+                HengeLog.log("session", "balancing vCPUs \(activeCPUs) -> 4 P-cores for smoother GPU & I/O on \(Device.physicalMemoryGB) GB host")
+            } else {
+                bootCPUCount = activeCPUs
+            }
+            rc = henge_vm_boot(liveMac.rom.path, liveMac.disk.path, liveMac.aux.path, liveMac.ecid, liveMac.seed, ram, Int32(bootCPUCount), &buffer, buffer.count)
+            if rc == 0 {
+                bootCPUs = bootCPUCount
+            }
         }
         if rc != 0 {
             error = String(cString: buffer)
             return
         }
         bootRAM = ram
-        bootCPUs = activeCPUs
+        if hasSnapshot { bootCPUs = activeCPUs }
         ramMode = henge_vm_ram_mode()
         henge_vm_set_cursor_style(Int32(cursorScale), sharpCursor ? 1 : 0)
-        HengeLog.log("session", "active RAM \(ram) MB, CPUs \(activeCPUs), backing mode \(ramMode)")
+        HengeLog.log("session", "active RAM \(ram) MB, CPUs \(bootCPUs), backing mode \(ramMode)")
         started = Date()
         var used = liveMac
         used.lastUsed = started
@@ -951,7 +964,6 @@ struct SessionView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 10) { showWallpaperTip = false }
             }
             if tick % 30 == 0 { HengeLog.logFootprint("session") } // how close to the limit, for a memory kill leaves no crash report
-            if tick % 60 == 0 { MacPreview.save(for: mac) }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }

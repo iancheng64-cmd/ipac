@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <errno.h>
+#include <TargetConditionals.h>
 #include "../core/machine.h"
 #include "disk.h"
 
@@ -23,6 +24,14 @@ int hv_disk_open(HvDisk *d, const char *path, uint64_t offset, int readonly) {
     d->offset = offset;
     d->size = (uint64_t)st.st_size - offset;
     d->readonly = readonly;
+    (void)fcntl(d->fd, F_RDAHEAD, 1);
+#if TARGET_OS_IPHONE
+    /* Avoid duplicating multi-GB disk.img blocks inside iPadOS UBC page cache alongside guest RAM. */
+    const char *dc = getenv("HV_DISK_CACHE");
+    if (!(dc && atoi(dc) > 0)) {
+        (void)fcntl(d->fd, F_NOCACHE, 1);
+    }
+#endif
     /* HV_WRITE_CACHE=0: writes skip the host's cache (F_NOCACHE), so a long run of them cannot pile up
        gigabytes of dirty pages; reads stay cached, and the kernel keeps the two coherent. Off by default:
        on the Mac bench big writes took 2-3x as long that way (2 GB + sync 4-6 s -> 9-17 s) and everyday

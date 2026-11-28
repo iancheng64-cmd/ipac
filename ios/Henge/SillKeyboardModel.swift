@@ -73,6 +73,11 @@ enum SillLinuxKey {
     static let rightCmd: UInt16 = 126
 }
 
+enum SillKeyboardInputMode: String, CaseIterable, Equatable {
+    case english
+    case zhuyin
+}
+
 enum SillKeyKind: Equatable {
     case standard
     case function
@@ -110,6 +115,25 @@ struct SillShortcutSpec: Identifiable, Equatable {
 }
 
 enum SillKeyboardLayout {
+    static func zhuyinLegend(for code: UInt16) -> String? {
+        zhuyinMap[code]
+    }
+
+    static let zhuyinMap: [UInt16: String] = [
+        SillLinuxKey.one: "ㄅ", SillLinuxKey.two: "ㄉ", SillLinuxKey.three: "ˇ", SillLinuxKey.four: "ˋ",
+        SillLinuxKey.five: "ㄓ", SillLinuxKey.six: "ˊ", SillLinuxKey.seven: "˙", SillLinuxKey.eight: "ㄚ",
+        SillLinuxKey.nine: "ㄞ", SillLinuxKey.zero: "ㄢ", SillLinuxKey.minus: "ㄦ",
+        SillLinuxKey.q: "ㄆ", SillLinuxKey.w: "ㄊ", SillLinuxKey.e: "ㄍ", SillLinuxKey.r: "ㄐ",
+        SillLinuxKey.t: "ㄔ", SillLinuxKey.y: "ㄗ", SillLinuxKey.u: "ㄧ", SillLinuxKey.i: "ㄛ",
+        SillLinuxKey.o: "ㄟ", SillLinuxKey.p: "ㄣ",
+        SillLinuxKey.a: "ㄇ", SillLinuxKey.s: "ㄋ", SillLinuxKey.d: "ㄎ", SillLinuxKey.f: "ㄑ",
+        SillLinuxKey.g: "ㄕ", SillLinuxKey.h: "ㄘ", SillLinuxKey.j: "ㄨ", SillLinuxKey.k: "ㄜ",
+        SillLinuxKey.l: "ㄠ", SillLinuxKey.semicolon: "ㄤ",
+        SillLinuxKey.z: "ㄈ", SillLinuxKey.x: "ㄌ", SillLinuxKey.c: "ㄏ", SillLinuxKey.v: "ㄒ",
+        SillLinuxKey.b: "ㄖ", SillLinuxKey.n: "ㄙ", SillLinuxKey.m: "ㄩ", SillLinuxKey.comma: "ㄝ",
+        SillLinuxKey.dot: "ㄡ", SillLinuxKey.slash: "ㄥ",
+    ]
+
     static let shortcuts: [SillShortcutSpec] = [
         SillShortcutSpec(id: "esc", label: "Esc", codes: [SillLinuxKey.esc]),
         SillShortcutSpec(id: "spotlight", label: "Spotlight", codes: [SillLinuxKey.leftCmd, SillLinuxKey.space]),

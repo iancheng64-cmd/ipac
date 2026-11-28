@@ -34,9 +34,14 @@ enum EngineTuning {
                 env["HV_HZ"] = String(requestedHz)
             }
         }
-        if d.bool(forKey: superblocksKey) { env["HV_SUPERBLOCKS"] = "1" } else { unsetenv("HV_SUPERBLOCKS") }
+        if (d.object(forKey: superblocksKey) as? Bool) ?? true { env["HV_SUPERBLOCKS"] = "1" } else { unsetenv("HV_SUPERBLOCKS") }
         if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
+#if os(iOS)
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
+        else if d.object(forKey: fastFlushKey) == nil { env["HV_FLUSH"] = "1" }
+#else
+        if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
+#endif
         if d.bool(forKey: pCoreQosKey) { env["HV_QOS"] = "ui" }
         let docs = documents ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         // GPU command trace: on while Documents/trace-on exists (it is checked every frame, so it can be toggled live).

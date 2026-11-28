@@ -44,7 +44,7 @@ enum Sharing {
         Task { @MainActor in
             if helperRunning {
                 henge_share_set_clipboard(text)
-                try? await Task.sleep(nanoseconds: 800_000_000) // for the helper to put it on the Mac's clipboard
+                try? await Task.sleep(nanoseconds: 180_000_000) // for the helper to put it on the Mac's clipboard
                 Keys.chord(Keys.command, "v")
             } else {
                 await Keys.typeSlowly(text)

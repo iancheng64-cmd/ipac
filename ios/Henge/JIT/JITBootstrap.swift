@@ -74,13 +74,23 @@ enum JITBootstrap {
         if physMB >= 10_000 && Entitlements.memoryLimitAtLaunch >= 5_500 << 20 {
             return 1536
         }
-        return Entitlements.memoryLimitAtLaunch >= 3_500 << 20 ? 1024 : 512
+        return physMB >= 10_000 && Entitlements.memoryLimitAtLaunch >= 3_500 << 20 ? 1024 : 512
     }()
     static let jitBytes: Int = {
-        switch (UserDefaults.standard.object(forKey: codeCacheKey) as? Int) ?? defaultCodeCacheMB {
+        let physMB = ProcessInfo.processInfo.physicalMemory >> 20
+        let stored = UserDefaults.standard.object(forKey: codeCacheKey) as? Int
+        let rawChoice = stored ?? defaultCodeCacheMB
+        let chosen: Int
+        if physMB < 10_000 && rawChoice > 512 {
+            HengeLog.log("jit", "capping stored codeCacheMB \(rawChoice) -> 512 MB on \(physMB) MiB host to avoid swap pressure")
+            chosen = 512
+        } else {
+            chosen = rawChoice
+        }
+        switch chosen {
         case 1536: return 1536 << 20
-        case 512: return 512 << 20
-        default: return 1024 << 20
+        case 1024: return 1024 << 20
+        default: return 512 << 20
         }
     }()
 

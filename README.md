@@ -85,12 +85,13 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 ### 完整繁體中文介面與其他亮點
 
 - **全繁體中文介面與即時語言切換**：包含首頁、安裝流程、硬體與儲存設定、單機詳情、即時續玩（Instant Resume）、獨立執行 Mac App（實驗性）、JIT 精靈與本機配對（iOS / iPadOS 27）、以及系統相機／區域網路權限說明（`CFBundleDevelopmentRegion` = `zh-Hant`）。
-- **Sill 觸控手勢與 Apple 風格視覺鍵盤（v0.5.9 更新）**：
+- **Sill 觸控手勢與 Apple 風格懸浮雙語鍵盤（v0.6.0 更新）**：
   - 保留 Henge 原版頂部毛玻璃膠囊控制列：支援**四指輕點**或**四指長按**顯示／隱藏控制列。
   - 在膠囊控制列內建雙模式分段切換按鈕：
     - **Sill 多指觸控板模式**：原生 Magic Trackpad 2 兩指捲動／縮放，並支援 **Mac 原生三指拖曳（Three-Finger Drag）**、單指輕點左鍵與雙指輕點右鍵。
     - **Sill 手勢觸控模式**：透過獨立 USB 絕對座標指標裝置達成與 Sill 全螢幕完全一致的操作——點哪裡按哪裡、長按右鍵、長按後拖曳一對一跟著手指移動、單指或雙指滑動平滑捲動、雙指輕點右鍵。
-  - 內建 Apple iPadOS Magic Keyboard ＋ 毛玻璃質感 5 列完整 macOS QWERTY 視覺鍵盤，搭配 SF Symbols 功能／方向鍵、黏滯修飾鍵反白與 Caps Lock 綠燈，支援即時 `⌘C / ⌘V / ⌘Z / ⌘W / ⌘Q`、`Spotlight`、`Mission` 快捷列與 `中/英 IME` 切換。
+  - **Apple 懸浮可調大小雙語鍵盤**：開啟時不再縮小或重排 macOS 畫面，可拖曳頂端把手自由移動（雙擊重置）、拖曳右下角縮放手把或點選 `A-` / `A+`（與雙指縮放）自由調整大小，並可隨時收起；支援台灣 Apple 鍵盤 **注音（ㄅㄆㄇ）與 ABC 雙語鍵帽**（`🌐` 同步送出 `⌃Space`）、內嵌 **`中文組字`** 列直接用 iPadOS 注音／手寫送出繁體中文，與完整 SF Symbols 修飾鍵／倒 T 方向鍵。
+- **高效能記憶體與磁碟 I/O 調校（v0.6.0）**：在 8 GB 以下 M1/iPad 裝置自動平衡 4 P-core vCPU 與 512 MB JIT 快取（避開 245 秒後 SWAP 崖降）、對映像檔啟用 `F_RDAHEAD`＋iOS `F_NOCACHE` 與高優先權 NVMe 背景工作執行緒，並預設開啟 Superblocks。
 - **剪貼簿與共享資料夾**：在 Mac 終端機執行自動輸入的安裝指令（`curl -s http://10.0.2.4/.henge/install | sh`）並按 Return 後，「檔案 › iPac / Henge › Shared」即同步至 Mac 家目錄的 `Henge` 資料夾；Mac 複製文字自動同步至 iPad，iPad 複製文字後點選上方控制列第三顆貼上鈕即可貼入 Mac。
 - **外接螢幕支援**：連接 USB-C / HDMI 顯示器會自動雙螢幕分工，外接螢幕顯示 macOS 畫面，iPad 保留觸控板與鍵盤控制。
 
@@ -98,7 +99,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
 ## 安裝與下載
 
-直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.5.9-build118.ipa`。
+直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.6.0-build119.ipa`。
 
 ### 系統需求
 
