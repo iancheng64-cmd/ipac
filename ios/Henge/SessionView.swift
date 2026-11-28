@@ -386,13 +386,15 @@ struct SessionView: View {
                 Spacer()
                 pasteTool
                 Spacer()
+                touchModeSwitch(onGlass: false)
+                Spacer()
                 tool("plus.magnifyingglass", L10n.text("放大檢視")) { zoomed = true }
                 Spacer()
                 tool("info.circle", L10n.text("詳細資訊")) { showDetails = true }
                 Spacer()
                 tool("power", L10n.text("關機"), tint: Desk.bad) { stopTapped() }
             }
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 14)
             .frame(width: layout.pad.width, height: 54)
             .background(Desk.card, in: Capsule())
             .overlay(Capsule().stroke(Desk.hairline, lineWidth: 0.5))
@@ -470,6 +472,50 @@ struct SessionView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { showRevealHint = false }
     }
 
+    private func selectTouchMode(_ mode: TrackpadTouchMode) {
+        guard touchMode != mode else { return }
+        touchModeRaw = mode.rawValue
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private func touchModeSwitch(onGlass: Bool) -> some View {
+        HStack(spacing: 2) {
+            modeSegment(
+                mode: .trackpad,
+                symbol: "rectangle.and.hand.point.up.left",
+                label: "Sill 多指觸控板",
+                onGlass: onGlass
+            )
+            modeSegment(
+                mode: .directPointer,
+                symbol: "hand.point.up.left",
+                label: "直接觸控指標",
+                onGlass: onGlass
+            )
+        }
+        .padding(3)
+        .background(onGlass ? Color.white.opacity(0.12) : Desk.raised, in: Capsule())
+        .overlay(Capsule().stroke(onGlass ? Color.white.opacity(0.16) : Desk.hairline, lineWidth: 0.5))
+        .animation(.spring(response: 0.24, dampingFraction: 0.9), value: touchMode)
+    }
+
+    private func modeSegment(mode: TrackpadTouchMode, symbol: String, label: String, onGlass: Bool) -> some View {
+        let active = touchMode == mode
+        return Button {
+            selectTouchMode(mode)
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(active ? Color.white : (onGlass ? Color.white.opacity(0.65) : Desk.dim))
+                .frame(width: 34, height: 34)
+                .background(active ? Desk.accent : Color.clear, in: Capsule())
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(L10n.text(label))
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
     private func tool(_ symbol: String, _ label: String, tint: Color = Desk.text, highlighted: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -493,6 +539,7 @@ struct SessionView: View {
                 toggleSillKeyboard()
             }
             pasteTool
+            touchModeSwitch(onGlass: true)
             tool(zoomed ? "minus.magnifyingglass" : "plus.magnifyingglass", zoomed ? L10n.text("恢復檢視") : L10n.text("放大檢視"), tint: zoomed ? Desk.accentLight : .white) {
                 zoomed.toggle()
             }
