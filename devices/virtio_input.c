@@ -102,7 +102,9 @@ static void enqueue(HvVirtioInput *d, HvInputEvent event) {
         d->head++; /* full: lose the oldest */
         d->dropped++;
     }
-    d->ring[d->tail++ % HV_VINPUT_RING] = event;
+    uint32_t tail = d->tail;
+    d->ring[tail % HV_VINPUT_RING] = event;
+    __atomic_store_n(&d->tail, tail + 1, __ATOMIC_RELEASE);
 }
 
 void hv_virtio_input_send(HvVirtioInput *d, uint16_t type, uint16_t code, int32_t value) {
@@ -126,6 +128,7 @@ void hv_virtio_input_poll(HvVirtioInput *d) {
     if (!d) return;
     HvVirtio *v = &d->vio;
     if (!(v->status & 4) || !v->q[EVENTQ].enabled) return; /* DRIVER_OK */
+    if (__atomic_load_n(&d->head, __ATOMIC_RELAXED) == __atomic_load_n(&d->tail, __ATOMIC_ACQUIRE)) return;
     static HvVirtqElem e;
     int any = 0;
     pthread_mutex_lock(&d->mu);

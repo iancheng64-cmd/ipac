@@ -6,11 +6,13 @@ import UIKit
 /// hardware keyboard works whether or not that is open.
 struct KeyboardCatcher: UIViewRepresentable {
     @Binding var active: Bool
+    var switchToSill: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> Holder { Holder() }
 
     func updateUIView(_ view: Holder, context: Context) {
         view.typer.onHide = { active = false }
+        view.typer.onSwitchToSill = switchToSill
         view.typing = active
         DispatchQueue.main.async { view.takeKeyboard() }
     }
@@ -82,8 +84,12 @@ struct KeyboardCatcher: UIViewRepresentable {
 
     final class CatcherView: KeyListener, UIKeyInput {
         var onHide: () -> Void = {}
+        var onSwitchToSill: (() -> Void)?
         private lazy var row: UIHostingController<ModifierRow> = {
-            let host = UIHostingController(rootView: ModifierRow(hide: { [weak self] in self?.onHide() }))
+            let host = UIHostingController(rootView: ModifierRow(
+                switchToSill: { [weak self] in self?.onSwitchToSill?() },
+                hide: { [weak self] in self?.onHide() }
+            ))
             host.sizingOptions = []
             host.view.backgroundColor = .clear
             host.view.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 56)
@@ -196,11 +202,22 @@ final class StickyKeys: ObservableObject {
 
 /// The keys an on-screen keyboard doesn't have, in the slot above it.
 struct ModifierRow: View {
+    var switchToSill: (() -> Void)? = nil
     let hide: () -> Void
     @ObservedObject private var sticky = StickyKeys.shared
 
     var body: some View {
         HStack(spacing: 5) {
+            if let switchToSill {
+                Button(action: switchToSill) {
+                    Text("Sill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Desk.accent.opacity(0.9), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                }
+                .accessibilityLabel(L10n.text("Sill 視覺鍵盤"))
+            }
             HeldKey(label: "esc", code: Keys.escape)
             HeldKey(label: "tab", code: Keys.tab)
             modifier("⌃", Keys.control, "Control")
@@ -217,7 +234,7 @@ struct ModifierRow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Desk.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
-            .accessibilityLabel("隱藏鍵盤")
+            .accessibilityLabel(L10n.text("隱藏鍵盤"))
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 6)

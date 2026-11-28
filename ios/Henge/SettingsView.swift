@@ -20,6 +20,7 @@ struct SettingsView: View {
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
     @AppStorage(VolumeClicks.swapKey) private var swapButtons = false
     @AppStorage(PhysicalMouseButtons.swapKey) private var swapMouseButtons = false
+    @AppStorage(TrackpadTouchMode.storageKey) private var sillTouchMode = TrackpadTouchMode.trackpad.rawValue
     @AppStorage(EngineTuning.refreshKey) private var refreshRate = 60
     @AppStorage(EngineTuning.fastFlushKey) private var fastFlush = true
     @AppStorage(EngineTuning.pCoreQosKey) private var pCoreQos = false
@@ -120,6 +121,13 @@ struct SettingsView: View {
                 .listRowBackground(Desk.card)
                 if Device.isPad {
                     Section(L10n.text("滑鼠與觸控板")) {
+                        Picker(L10n.text("觸控手勢模式 (Sill)"), selection: $sillTouchMode) {
+                            Text(L10n.text("Sill 多指觸控板")).tag(TrackpadTouchMode.trackpad.rawValue)
+                            Text(L10n.text("直接觸控指標")).tag(TrackpadTouchMode.directPointer.rawValue)
+                        }
+                        .pickerStyle(.segmented)
+                        Text(L10n.text("支援四指輕點顯示／隱藏控制列。Sill 多指觸控板可直接用兩指捲動／縮放與三指切換桌面；直接觸控指標則以單指拖曳移動游標、兩指捲動。"))
+                            .font(.footnote).foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("游標移動速度"))
                             Slider(value: $mouseSpeed, in: 0.5...3)

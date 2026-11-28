@@ -418,6 +418,11 @@ void hv_pvg_lite_set_layer(HvPvgLite *p, void *layer) {
     if (previous) CFRelease(previous);
 }
 
+void hv_pvg_lite_set_cursor_style(HvPvgLite *p, int scale, int sharp) {
+    HvPvgMetal *metal = p ? atomic_load_explicit(&p->metal, memory_order_acquire) : NULL;
+    hv_pvg_metal_set_cursor_style(metal, scale, sharp);
+}
+
 void hv_pvg_lite_barrier_stats(HvPvgLite *p, uint64_t out[4]) {
     out[0] = p->barriers, out[1] = p->barrier_drains, out[2] = p->barrier_retries, out[3] = p->barrier_timeouts;
 }

@@ -417,8 +417,12 @@ void henge_vm_mouse_button(int button, int down) {
 }
 void henge_vm_mouse_scroll(int dx, int dy) {
     if (!lock_running()) return;
-    if (dy) hv_vm_mouse_wheel(dy);
-    if (dx) hv_vm_mouse_hwheel(dx);
+    hv_vm_mouse_scroll(dx, dy);
+    pthread_rwlock_unlock(&api_lock);
+}
+void henge_vm_set_cursor_style(int scale, int sharp) {
+    pthread_rwlock_rdlock(&api_lock);
+    hv_vm_set_cursor_style(scale, sharp);
     pthread_rwlock_unlock(&api_lock);
 }
 int henge_vm_pointer(int *x, int *y) {

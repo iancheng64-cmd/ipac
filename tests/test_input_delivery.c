@@ -34,6 +34,13 @@ static void mouse_reports(void) {
     assert(mouse.tail == 1 && mouse.dropped == 0);
     assert(!memcmp(&mouse.ring[HV_VINPUT_RING - 2], axes, sizeof(axes)));
     assert(!memcmp(&mouse.ring[0], &syn, sizeof(syn)));
+
+    /* Idle poll skips when head == tail (lock-free fast path). */
+    mouse.vio.status = 4;
+    mouse.vio.q[0].enabled = 1;
+    mouse.head = mouse.tail;
+    hv_virtio_input_poll(&mouse);
+    assert(mouse.delivered == 0);
     pthread_mutex_destroy(&mouse.mu);
 }
 
@@ -66,6 +73,9 @@ static void touch_reports(void) {
     assert(pad.tp_rlen[2] == 30 && !memcmp(delivered + 2 * 64, pad.tp_reports[2], 30));
     assert(pad.tp_rlen[6] == 12 && !memcmp(delivered + 6 * 64, pad.tp_reports[6], 12));
     assert(pad.tp_ts == 24);
+    /* Idle xHCI poll returns immediately without touching queues. */
+    hv_xhci_poll(&pad);
+    assert(pad.tp_delivered == 7);
     pthread_mutex_destroy(&pad.mu);
 }
 

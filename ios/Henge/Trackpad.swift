@@ -1,46 +1,51 @@
 import SwiftUI
 import UIKit
 
-/// A surface that works like a Mac's trackpad — it is one: the engine presents it on
-/// the Mac's USB bus as a Magic Trackpad 2, so the Mac's own multitouch engine sees
-/// the fingers: two scroll, three swipe between Spaces and to Mission Control, four
-/// show the session's hidden controls.
-///
-/// Clicking depends on the input mode (Settings > Trackpad):
-///  - Touchscreen: the surface itself clicks. A quick tap is a left click, a quick
-///    two-finger tap is a right click, and touching then holding presses the button
-///    down so moving drags. These go out as mouse buttons alongside the pad's fingers.
-///  - Volume buttons: the surface only points and gestures; the clicks live on the
-///    volume keys (VolumeClicks), so a tap here does nothing.
-/// Only fingers count: a real trackpad or mouse goes through HardwareMouse.
+/// A surface backed by `SillTouchEngine`:
+/// - Sill Multi-Finger Trackpad mode: presents fingers to macOS via the emulated USB Magic Trackpad 2
+///   (2-finger scroll/pinch, 3-finger Spaces & Mission Control), plus optional tap-to-click / hold-to-drag.
+/// - Direct Touch Pointer mode: 1-finger relative cursor drag, 2-finger scroll, tap click, hold-to-drag.
+/// - Both modes: 4-finger quick tap anywhere toggles the floating HUD capsule cleanly without stray clicks.
 struct Trackpad: UIViewRepresentable {
-    /// Four fingers tapped together: the session shows its hidden controls.
+    /// Four fingers tapped together: the session toggles its floating controls.
     static let revealTap = Notification.Name("henge.trackpad.revealTap")
 
-    func makeUIView(context: Context) -> Surface { Surface() }
-    func updateUIView(_ view: Surface, context: Context) {}
+    var touchMode: TrackpadTouchMode = .trackpad
+    var pointerSpeed: Double = 1.0
+    var scrollSpeed: Double = 0.3
+    var reverseScrolling: Bool = false
+    var onToggleHud: (() -> Void)? = nil
+
+    func makeUIView(context: Context) -> Surface {
+        let view = Surface()
+        applyConfig(to: view)
+        return view
+    }
+
+    func updateUIView(_ view: Surface, context: Context) {
+        applyConfig(to: view)
+    }
+
+    private func applyConfig(to view: Surface) {
+        view.pointerSpeed = pointerSpeed
+        view.scrollSpeed = scrollSpeed
+        view.reverseScrolling = reverseScrolling
+        view.onToggleHud = onToggleHud
+        view.setTouchMode(touchMode)
+    }
 
     final class Surface: UIView, UIPointerInteractionDelegate {
-        /// The emulated pad's sensor, in the Magic Trackpad 2's own units.
-        private static let sensorW: Int32 = 8134
-        private static let sensorH: Int32 = 5206
-        private static let holdTime: TimeInterval = 0.4
-        private static let tapTime: TimeInterval = 0.3
-        private static let tapDistance: CGFloat = 8
-
-        private struct Finger { var touch: UITouch; var id: Int32 }
-
-        private var fingers: [Finger] = []
-        private var freeIds = Set<Int32>(1...5) /* a touch screen reports five fingers at most */
-        private var started = Date()
-        private var travelled: CGFloat = 0
-        private var mostFingers = 0
+        private let engine = SillTouchEngine(mode: .trackpad)
+        private var holdTimer: Timer?
+        private let lightBuzz = UIImpactFeedbackGenerator(style: .light)
+        private let mediumBuzz = UIImpactFeedbackGenerator(style: .medium)
         private var touchesLogged = 0
 
-        /* Touchscreen-mode clicking. */
-        private var holding = false
-        private var holdTimer: Timer?
-        private let buzz = UIImpactFeedbackGenerator(style: .medium)
+        var pointerSpeed: Double = 1.0
+        var scrollSpeed: Double = 0.3
+        var reverseScrolling: Bool = false
+        var onToggleHud: (() -> Void)?
+
         private var tapsClick: Bool { VolumeClicks.inputMode == .touchscreen }
 
         override init(frame: CGRect) {
@@ -55,127 +60,122 @@ struct Trackpad: UIViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError("made in code") }
 
-        /// Where the finger is on the pad's sensor, in its units.
-        private func sensor(_ t: UITouch) -> (Int32, Int32) {
-            let p = t.location(in: self)
-            // One scale for both axes. The view and the pad's sensor are different
-            // shapes, so stretching the view to fill the sensor would make a finger
-            // move the pointer further on one axis than the other. Map the view to a
-            // centred part of the sensor at a single scale instead.
-            let w = max(Double(bounds.width), 1), h = max(Double(bounds.height), 1)
-            let scale = min(Double(Self.sensorW) / w, Double(Self.sensorH) / h)
-            let x = (Double(p.x) - w / 2) * scale + Double(Self.sensorW) / 2
-            let y = (Double(p.y) - h / 2) * scale + Double(Self.sensorH) / 2
-            return (Int32(min(max(x, 0), Double(Self.sensorW))),
-                    Int32(min(max(y, 0), Double(Self.sensorH))))
+        func setTouchMode(_ mode: TrackpadTouchMode) {
+            let result = engine.switchMode(to: mode, tsMs: SillTouchEngine.ms(ProcessInfo.processInfo.systemUptime))
+            if result.cancelHoldTimer { cancelHold() }
+            execute(result.actions)
         }
 
-        /* A touch sample's own clock, in ms. The guest derives finger speed from the
-           timestamp deltas, so reports must carry the sample time, not the moment we
-           process the event -- otherwise a burst of samples reads as one enormous flick
-           and scroll inertia goes wild on release. */
-        private static func ms(_ t: TimeInterval) -> UInt32 { UInt32(truncatingIfNeeded: Int(t * 1000)) }
+        private func makeSamples(_ touches: Set<UITouch>) -> [SillTouchSample] {
+            touches.compactMap { touch in
+                guard touch.type != .indirectPointer else { return nil }
+                return SillTouchSample(
+                    token: ObjectIdentifier(touch).hashValue,
+                    location: touch.location(in: self),
+                    previousLocation: touch.previousLocation(in: self),
+                    timestamp: touch.timestamp
+                )
+            }
+        }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-            let touches = touches.filter { $0.type != .indirectPointer }
-            guard !touches.isEmpty else { return }
-            if fingers.isEmpty {
-                started = Date()
-                travelled = 0
-                mostFingers = 0
-                if tapsClick { buzz.prepare() }
+            let samples = makeSamples(touches)
+            guard !samples.isEmpty else { return }
+            if engine.activeFingerCount == 0 && tapsClick {
+                lightBuzz.prepare()
+                mediumBuzz.prepare()
             }
-            for t in touches {
-                guard let id = freeIds.min() else { break }
-                freeIds.remove(id)
-                fingers.append(Finger(touch: t, id: id))
-                let (x, y) = sensor(t)
-                henge_vm_touch(id, 0, x, y, Self.ms(t.timestamp))
-                if HardwareMouse.traceInput && touchesLogged < 12 {
-                    touchesLogged += 1
-                    HengeLog.log("input", "trackpad: finger \(id) down at \(x),\(y)")
-                }
-            }
-            mostFingers = max(mostFingers, fingers.count)
-            guard tapsClick else { return }
-            if fingers.count >= 2 {
-                cancelHold()
-                if holding { /* a drag becomes a multi-finger gesture */
-                    holding = false
-                    henge_vm_mouse_button(0, 0)
-                }
-            } else {
-                armHold()
-            }
+            let result = engine.touchesBegan(
+                samples,
+                viewSize: bounds.size,
+                tapsClick: tapsClick,
+                now: ProcessInfo.processInfo.systemUptime
+            )
+            if result.cancelHoldTimer { cancelHold() }
+            execute(result.actions)
+            if result.armHoldTimer { armHold() }
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-            var moved = false
-            let ts = Self.ms(event?.timestamp ?? touches.first?.timestamp ?? 0)
-            for t in touches where t.type != .indirectPointer {
-                guard let i = fingers.firstIndex(where: { $0.touch == t }) else { continue }
-                let now = t.location(in: self), before = t.previousLocation(in: self)
-                travelled += abs(now.x - before.x) + abs(now.y - before.y)
-                let (x, y) = sensor(t)
-                henge_vm_touch(fingers[i].id, 1, x, y, ts)
-                moved = true
-            }
-            /* Moving means pointing or a gesture, not a tap or a press-to-drag. */
-            if tapsClick && travelled >= Self.tapDistance && !holding { cancelHold() }
-            /* One frame with every finger that moved, so the guest sees a gesture's
-               fingers move together rather than one at a time. */
-            if moved { henge_vm_touch_frame(ts) }
+            let samples = makeSamples(touches)
+            guard !samples.isEmpty else { return }
+            let ts = event?.timestamp ?? samples[0].timestamp
+            let result = engine.touchesMoved(
+                samples,
+                viewSize: bounds.size,
+                tapsClick: tapsClick,
+                pointerSpeed: pointerSpeed,
+                scrollSpeed: scrollSpeed,
+                reverseScrolling: reverseScrolling,
+                frameTimestamp: ts
+            )
+            if result.cancelHoldTimer { cancelHold() }
+            execute(result.actions)
         }
 
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            endTouches(touches)
+        }
 
-        private func lift(_ touches: Set<UITouch>) {
-            var lifted: [Int32] = []
-            fingers.removeAll { finger in
-                guard touches.contains(finger.touch), finger.touch.type != .indirectPointer else { return false }
-                freeIds.insert(finger.id)
-                lifted.append(finger.id)
-                return true
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            endTouches(touches)
+        }
+
+        private func endTouches(_ touches: Set<UITouch>) {
+            let tokens = touches.compactMap { touch -> Int? in
+                guard touch.type != .indirectPointer else { return nil }
+                return ObjectIdentifier(touch).hashValue
             }
-            guard !lifted.isEmpty else { return }
-            let ts = Self.ms(touches.map(\.timestamp).max() ?? 0)
-            for id in lifted { henge_vm_touch(id, 2, 0, 0, ts) }
-            guard fingers.isEmpty else { return } /* fingers still down: the gesture goes on */
-            /* The whole gesture is over. */
-            if tapsClick {
-                cancelHold()
-                let quick = Date().timeIntervalSince(started) < Self.tapTime
-                let still = travelled < Self.tapDistance
-                if holding {
-                    holding = false
-                    henge_vm_mouse_button(0, 0) /* let go of the drag */
-                } else if quick && still {
-                    if mostFingers == 1 { click(0) }      /* a tap is a left click */
-                    else if mostFingers == 2 { click(1) } /* a two-finger tap is a right click */
+            guard !tokens.isEmpty else { return }
+            let tsMs = SillTouchEngine.ms(touches.map(\.timestamp).max() ?? ProcessInfo.processInfo.systemUptime)
+            let result = engine.touchesEnded(
+                tokens,
+                tapsClick: tapsClick,
+                tsMs: tsMs,
+                now: ProcessInfo.processInfo.systemUptime
+            )
+            if result.cancelHoldTimer { cancelHold() }
+            execute(result.actions)
+        }
+
+        private func execute(_ actions: [SillTouchAction]) {
+            for action in actions {
+                switch action {
+                case let .hidTouch(id, phase, x, y, tsMs):
+                    henge_vm_touch(id, phase, x, y, tsMs)
+                    if phase == 0 && HardwareMouse.traceInput && touchesLogged < 12 {
+                        touchesLogged += 1
+                        HengeLog.log("input", "trackpad: finger \(id) down at \(x),\(y)")
+                    }
+                case let .hidTouchFrame(tsMs):
+                    henge_vm_touch_frame(tsMs)
+                case let .mouseMove(dx, dy):
+                    henge_vm_mouse_move(dx, dy)
+                case let .mouseButton(button, down):
+                    henge_vm_mouse_button(button, down ? 1 : 0)
+                case let .mouseScroll(dx, dy):
+                    henge_vm_mouse_scroll(dx, dy)
+                case .hapticLight:
+                    lightBuzz.impactOccurred()
+                case .hapticMedium:
+                    mediumBuzz.impactOccurred()
+                case .toggleHud:
+                    if let onToggleHud {
+                        onToggleHud()
+                    } else {
+                        NotificationCenter.default.post(name: Trackpad.revealTap, object: nil)
+                    }
+                case .releaseStickyKeys:
+                    StickyKeys.shared.releaseAll()
                 }
             }
-            if mostFingers >= 4, travelled < Self.tapDistance * 3, Date().timeIntervalSince(started) < Self.tapTime * 2 {
-                NotificationCenter.default.post(name: Trackpad.revealTap, object: nil)
-            }
-            StickyKeys.shared.releaseAll()
         }
 
-        /// A brief press of a mouse button: down then up.
-        private func click(_ button: Int32) {
-            henge_vm_mouse_button(button, 1)
-            henge_vm_mouse_button(button, 0)
-            buzz.impactOccurred()
-        }
-
-        /// A finger that stays put presses the left button down, so moving it drags.
         private func armHold() {
             cancelHold()
-            let timer = Timer(timeInterval: Self.holdTime, repeats: false) { [weak self] _ in
-                guard let self, self.fingers.count == 1, self.travelled < Self.tapDistance else { return }
-                self.holding = true
-                henge_vm_mouse_button(0, 1)
-                self.buzz.impactOccurred()
+            let timer = Timer(timeInterval: SillTouchEngine.holdDelay, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                self.execute(self.engine.fireHoldTimer())
             }
             RunLoop.main.add(timer, forMode: .common)
             holdTimer = timer

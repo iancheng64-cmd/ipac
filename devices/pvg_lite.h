@@ -37,6 +37,8 @@ int hv_pvg_lite_old_driver(HvPvgLite *p);
 const uint8_t *hv_pvg_lite_surface(HvPvgLite *p, uint32_t mapping);
 void hv_pvg_metal_unmap(HvPvgMetal *m, uint32_t mapping);
 void hv_pvg_metal_cursor_moved(HvPvgMetal *m);
+void hv_pvg_metal_set_cursor_style(HvPvgMetal *m, int scale, int sharp);
+void hv_pvg_lite_set_cursor_style(HvPvgLite *p, int scale, int sharp);
 /* Frames go to this CAMetalLayer from now on, drawn by the GPU. Any thread. */
 void hv_pvg_metal_set_layer(HvPvgMetal *m, void *layer);
 uint64_t hv_pvg_metal_gpu_frames(HvPvgMetal *m);

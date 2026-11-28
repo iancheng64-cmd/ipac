@@ -84,7 +84,11 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
 ### 完整繁體中文介面與其他亮點
 
-- **全繁體中文介面**：包含首頁、安裝流程、硬體與儲存設定、單機詳情、即時續玩（Instant Resume）、獨立執行 Mac App（實驗性）、JIT 精靈與本機配對（iOS / iPadOS 27）、以及系統相機／區域網路權限說明（`CFBundleDevelopmentRegion` = `zh-Hant`）。
+- **全繁體中文介面與即時語言切換**：包含首頁、安裝流程、硬體與儲存設定、單機詳情、即時續玩（Instant Resume）、獨立執行 Mac App（實驗性）、JIT 精靈與本機配對（iOS / iPadOS 27）、以及系統相機／區域網路權限說明（`CFBundleDevelopmentRegion` = `zh-Hant`）。
+- **Sill 膠囊控制列、內建視覺鍵盤與雙模式觸控手勢（v0.5.6 新增）**：
+  - 頂部浮動毛玻璃膠囊列於運行 macOS 時 5 秒自動收起並顯示置中微調控制條，任意時刻**四指輕點螢幕**皆可快速切換顯示／隱藏控制列。
+  - 內建 5 列完整 macOS QWERTY + 方向鍵與黏滯修飾鍵（`⌃ / ⌥ / ⌘ / ⇧` + `⇪` LED）視覺鍵盤，附頂部 `Esc`、`Spotlight`、`Mission`、`◂ Space`、`Space ▸`、`⌘C/V/Z/W/Q` 快捷膠囊列與 `中/英 IME` 切換。
+  - 支援在 **Sill 多指觸控板模式**（原生 Magic Trackpad 2 兩指捲動／縮放與三指切換桌面）與 **直接觸控指標模式**（單指相對游標＋兩指捲動）間即時切換。
 - **剪貼簿與共享資料夾**：在 Mac 終端機執行自動輸入的安裝指令（`curl -s http://10.0.2.4/.henge/install | sh`）並按 Return 後，「檔案 › iPac / Henge › Shared」即同步至 Mac 家目錄的 `Henge` 資料夾；Mac 複製文字自動同步至 iPad，iPad 複製文字後點選上方控制列第三顆貼上鈕即可貼入 Mac。
 - **外接螢幕支援**：連接 USB-C / HDMI 顯示器會自動雙螢幕分工，外接螢幕顯示 macOS 畫面，iPad 保留觸控板與鍵盤控制。
 
@@ -92,7 +96,7 @@ iPac 在「**安裝**」分頁提供三種安裝儲存模式：
 
 ## 安裝與下載
 
-直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.4.1-build108.ipa`。
+直接前往 [**Releases 頁面**](https://github.com/iancheng64-cmd/ipac/releases/latest) 下載最新的 `iPac-v0.5.6-build115.ipa`。
 
 ### 系統需求
 

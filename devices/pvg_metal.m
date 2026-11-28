@@ -18,20 +18,50 @@
 #include <sys/utsname.h>
 
 /* 1080p shrunk onto a phone would make a normal pointer a few dots across; an iPad's screen needs less. */
+static _Atomic int hv_cursor_scale_val = 0;
+static _Atomic int hv_cursor_sharp_val = -1;
+
 static int cursor_scale(void) {
+    int cached = atomic_load_explicit(&hv_cursor_scale_val, memory_order_relaxed);
+    if (cached >= 1 && cached <= 3) return cached;
 #if TARGET_OS_IPHONE
-    NSInteger saved = [[NSUserDefaults standardUserDefaults] integerForKey:@"henge.cursor.scale"];
-    if (saved >= 1 && saved <= 3) return (int)saved;
     static int defaultScale;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        struct utsname u;
-        uname(&u);
-        defaultScale = strncmp(u.machine, "iPad", 4) ? 3 : 1;
+        NSInteger saved = [[NSUserDefaults standardUserDefaults] integerForKey:@"henge.cursor.scale"];
+        if (saved >= 1 && saved <= 3) {
+            defaultScale = (int)saved;
+        } else {
+            struct utsname u;
+            uname(&u);
+            defaultScale = strncmp(u.machine, "iPad", 4) ? 3 : 1;
+        }
+        int expected = 0;
+        atomic_compare_exchange_strong_explicit(&hv_cursor_scale_val, &expected, defaultScale, memory_order_relaxed, memory_order_relaxed);
     });
-    return defaultScale;
+    cached = atomic_load_explicit(&hv_cursor_scale_val, memory_order_relaxed);
+    return (cached >= 1 && cached <= 3) ? cached : defaultScale;
 #else
     return 1;
+#endif
+}
+
+static BOOL cursor_sharp(void) {
+    int cached = atomic_load_explicit(&hv_cursor_sharp_val, memory_order_relaxed);
+    if (cached >= 0) return cached != 0;
+#if TARGET_OS_IPHONE
+    static int defaultSharp = 1;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSNumber *sharpSetting = [[NSUserDefaults standardUserDefaults] objectForKey:@"henge.cursor.sharp"];
+        defaultSharp = (sharpSetting && !sharpSetting.boolValue) ? 0 : 1;
+        int expected = -1;
+        atomic_compare_exchange_strong_explicit(&hv_cursor_sharp_val, &expected, defaultSharp, memory_order_relaxed, memory_order_relaxed);
+    });
+    cached = atomic_load_explicit(&hv_cursor_sharp_val, memory_order_relaxed);
+    return cached >= 0 ? (cached != 0) : (defaultSharp != 0);
+#else
+    return YES;
 #endif
 }
 
@@ -45,6 +75,8 @@ static int cursor_scale(void) {
 #include "pvg_lite.h"
 #include "pvg_page_runs.h"
 #include "pvg_command_copy.h"
+#define HV_PVG_DEFINE_OBJECT_TABLE
+#include "pvg_object_table.h"
 #include "metallib.h"
 
 #if !TARGET_OS_IPHONE
@@ -133,7 +165,8 @@ enum { OBJ_BUFFER = 1, OBJ_TEXTURE = 2, OBJ_FUNCTION = 6, OBJ_SERIALIZED = 7, OB
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
     dispatch_queue_t worker;
-    NSMutableDictionary<NSNumber *, NSMutableDictionary<NSNumber *, HvObject *> *> *tasks;
+    HvTaskObjectTable *task_tables[512];
+    NSMutableDictionary<NSNumber *, HvTaskObjectTable *> *extra_tasks;
     NSMutableDictionary<NSNumber *, id<MTLTexture>> *mapped_textures;
     NSMutableDictionary<NSNumber *, HvObject *> *surfaces;
     /* Multi-plane surfaces' host IOSurfaces by the guest memory they stand for: each process maps a surface
@@ -869,8 +902,9 @@ static void sync_iosurface(HvObject *s) {
     /* HV_PVG_HOST_DUMP=prefix (debugging): the host surface as it is just before the guest's pixels go over it,
        for the first few multi-plane surfaces, with its layout in a .txt beside it: did the GPU draw something here
        that this copy throws away? */
-    const char *host_dump = getenv("HV_PVG_HOST_DUMP");
-    static int host_dumped;
+    static const char *host_dump;
+    static int host_dump_checked, host_dumped;
+    if (!host_dump_checked) { host_dump_checked = 1; host_dump = getenv("HV_PVG_HOST_DUMP"); }
     if (host_dump && s->plane_count && host_dumped < 12) {
         char path[1100];
         snprintf(path, sizeof path, "%s-%d.bin", host_dump, host_dumped);
@@ -909,8 +943,9 @@ static void sync_iosurface(HvObject *s) {
         memcpy(base, from, MIN(s->alloc, IOSurfaceGetAllocSize(s->iosurface)));
     }
     IOSurfaceUnlock(s->iosurface, 0, NULL);
-    const char *dump = getenv("HV_PVG_SURFACE_DUMP");
-    static int dumped;
+    static const char *dump;
+    static int dump_checked, dumped;
+    if (!dump_checked) { dump_checked = 1; dump = getenv("HV_PVG_SURFACE_DUMP"); }
     if (dump && s->plane_count && dumped < 6) {
         char path[1100];
         snprintf(path, sizeof path, "%s-%d.bin", dump, dumped++);
@@ -936,7 +971,9 @@ static void sync_iosurface(HvObject *s) {
        macOS 14's driver writes a compact one: u32 allocation at 0x10, width and height << 8 at 0x14 and 0x18, u32 row
        at 0x1c, bytes per pixel at 0x20 (BGRA 1920x1080: 007ec000 00078080 00043880 00001e00 00000004); one plane. */
     BOOL compact = hv_pvg_lite_old_driver(lite) != 0;
-    if (getenv("HV_PVG_DESC_DUMP")) {
+    static int desc_dump = -1;
+    if (desc_dump < 0) desc_dump = getenv("HV_PVG_DESC_DUMP") != NULL;
+    if (desc_dump) {
         fprintf(stderr, "surface-desc %llu:", mapping);
         for (int i = 0; i < 0x200; i += 4) fprintf(stderr, "%s%08x", i % 32 ? " " : "\n  ", *(const uint32_t *)(desc + i));
         fprintf(stderr, "\n");
@@ -1115,14 +1152,40 @@ static void sync_iosurface(HvObject *s) {
     if (!plane) mapped_textures[@(h.mapping)] = o->object;
 }
 
+- (HvTaskObjectTable *)taskTable:(uint32_t)task {
+    if (task < 512) {
+        HvTaskObjectTable *t = task_tables[task];
+        if (!t) task_tables[task] = t = [HvTaskObjectTable new];
+        return t;
+    }
+    if (!extra_tasks) extra_tasks = [NSMutableDictionary new];
+    NSNumber *key = @(task);
+    HvTaskObjectTable *t = extra_tasks[key];
+    if (!t) extra_tasks[key] = t = [HvTaskObjectTable new];
+    return t;
+}
+
+- (HvTaskObjectTable *)existingTaskTable:(uint32_t)task {
+    return task < 512 ? task_tables[task] : extra_tasks[@(task)];
+}
+
+- (void)removeTask:(uint32_t)task {
+    if (task < 512) {
+        [task_tables[task] removeAllObjects];
+        task_tables[task] = nil;
+    } else {
+        [extra_tasks[@(task)] removeAllObjects];
+        [extra_tasks removeObjectForKey:@(task)];
+    }
+}
+
 - (HvObject *)object:(uint32_t)ref task:(uint32_t)task {
     if (!ref) return nil;
     uint64_t list = hv_pvg_lite_task_objects(lite, task);
     uint32_t e[3];
     if (!list || hv_pvg_lite_task_read(lite, task, list + (uint64_t)ref * 12, e, 12)) return nil;
-    NSMutableDictionary *objs = tasks[@(task)];
-    if (!objs) tasks[@(task)] = objs = [NSMutableDictionary new];
-    HvObject *o = objs[@(ref)];
+    HvTaskObjectTable *objs = [self taskTable:task];
+    HvObject *o = [objs objectForRef:ref];
     if (o && !memcmp(o->entry, e, 12)) {
         /* macOS 14's driver names a surface before it writes the surface's description: try again a while.
            And it reuses surface ids: a texture over a surface that has since been replaced is made again. */
@@ -1135,7 +1198,7 @@ static void sync_iosurface(HvObject *s) {
             HvObject *again = [HvObject new];
             memcpy(again->entry, e, 12);
             again->retries = tries;
-            objs[@(ref)] = again;
+            [objs setObject:again forRef:ref];
             uint64_t at = (uint64_t)e[2] << 32 | e[1];
             [self makeMappedTexture:again at:at task:task];
             static int told;
@@ -1148,7 +1211,7 @@ static void sync_iosurface(HvObject *s) {
     }
     o = [HvObject new];
     memcpy(o->entry, e, 12);
-    objs[@(ref)] = o;
+    [objs setObject:o forRef:ref];
     uint32_t type = e[0] & 0xff, size = e[0] >> 8;
     uint64_t at = (uint64_t)e[2] << 32 | e[1];
     switch (type) {
@@ -1239,11 +1302,12 @@ static BOOL has_guest_pages(HvObject *o) {
     if (n < 8) return;
     uint32_t task = a[0], count = a[1];
     if (n < 8 + count * 4ull) return;
-    NSMutableDictionary *objs = tasks[@(task)];
+    HvTaskObjectTable *objs = [self existingTaskTable:task];
+    if (!objs) return;
     id<MTLCommandBuffer> cb = nil;
     id<MTLBlitCommandEncoder> blit = nil;
     for (uint32_t i = 0; i < count; i++) {
-        HvObject *o = objs[@(a[2 + i])];
+        HvObject *o = [objs objectForRef:a[2 + i]];
         if (!o || !o->guest_backed || !o->host_valid) continue;
         if (!cb) cb = [queue commandBuffer];
         [self page:o toGuest:YES task:task blit:&blit commandBuffer:cb];
@@ -1259,10 +1323,11 @@ static BOOL has_guest_pages(HvObject *o) {
 /* {task, count, {ref, host invalid, host valid, guest invalid, guest valid}}. */
 - (void)invalidate:(const uint32_t *)a length:(uint32_t)n {
     if (n < 8 || n < 8 + a[1] * 8ull) return;
-    NSMutableDictionary *objs = tasks[@(a[0])];
+    HvTaskObjectTable *objs = [self existingTaskTable:a[0]];
+    if (!objs) return;
     const uint8_t *e = (const uint8_t *)(a + 2);
     for (uint32_t i = 0; i < a[1]; i++, e += 8) {
-        HvObject *o = objs[@(*(const uint32_t *)e)];
+        HvObject *o = [objs objectForRef:*(const uint32_t *)e];
         if (!o) continue;
         if (e[6]) o->guest_stale = YES;
         if (e[7]) o->guest_stale = NO;
@@ -1408,12 +1473,12 @@ typedef struct {
 /* One serialized call. Tags are the guest's. */
 - (void)useHeaps:(const uint32_t *)refs count:(uint32_t)n task:(uint32_t)task encoder:(id)e stages:(int)stages {
     id<MTLHeap> __unsafe_unretained list[64];
-    NSMutableArray *keep = [NSMutableArray new];
+    id strong[64];
     uint32_t have = 0;
     for (uint32_t i = 0; i < n && have < 64; i++) {
         id heap = [self get:refs[i] task:task];
         if (!heap) continue;
-        [keep addObject:heap];
+        strong[have] = heap;
         list[have++] = heap;
     }
     if (!have) return;
@@ -1605,12 +1670,12 @@ typedef struct {
         uint32_t count = U32(0);
         if (count > 256 || r.size < 8 + count * 4ull) break;
         __unsafe_unretained id<MTLResource> items[256];
-        NSMutableArray *keep = [NSMutableArray new];
+        id strong[256];
         uint32_t have = 0;
         for (uint32_t i = 0; i < count; i++) {
             id x = [self get:U32(8 + i * 4) task:task];
             if (!x || [x conformsToProtocol:@protocol(MTLHeap)]) continue;
-            [keep addObject:x];
+            strong[have] = x;
             items[have++] = x;
         }
         if (!have) break;
@@ -2109,12 +2174,16 @@ typedef struct {
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = nil;
     BOOL sync_after = NO;
+    static int tally = -1;
+    if (tally < 0) tally = getenv("HV_PVG_TALLY") != NULL;
+    HvObject *res_objs[128] = {nil};
     for (uint32_t i = 0; i < nres; i++) {
         HvObject *o = [self object:res[i * 2] task:task];
+        if (i < 128) res_objs[i] = o;
         if (!o) continue;
         if (o->mapped) refresh_pages(self, task, o);
         if (o->surface) sync_iosurface(o->surface);
-        if (getenv("HV_PVG_TALLY") && (o->entry[0] & 0xff) == OBJ_MAPPED_TEXTURE) {
+        if (tally && (o->entry[0] & 0xff) == OBJ_MAPPED_TEXTURE) {
             static uint32_t seen[256];
             uint32_t f = res[i * 2 + 1] & 0xff, key = res[i * 2] & 0xff;
             if (seen[key] != f + 1) {
@@ -2134,7 +2203,8 @@ typedef struct {
        upload that over what the GPU drew: mostly zeros, which show as black boxes. */
     for (uint32_t i = 0; i < nres; i++)
         if (res[i * 2 + 1] & 2) { /* and what it is made from: a texture in a heap is the heap's bytes */
-            for (HvObject *o = [self object:res[i * 2] task:task]; o; o = o->parent) o->guest_stale = YES;
+            HvObject *o = i < 128 ? res_objs[i] : [self object:res[i * 2] task:task];
+            for (; o; o = o->parent) o->guest_stale = YES;
         }
     id e = nil; /* the open encoder */
     uint32_t etype = 0;
@@ -2208,7 +2278,7 @@ typedef struct {
         id<MTLBlitCommandEncoder> back = nil;
         for (uint32_t i = 0; i < nres; i++) {
             if (!(res[i * 2 + 1] & 4)) continue;
-            HvObject *o = [self object:res[i * 2] task:task];
+            HvObject *o = i < 128 ? res_objs[i] : [self object:res[i * 2] task:task];
             if (!o || !o->guest_backed) continue;
             [self page:o toGuest:YES task:task blit:&back commandBuffer:cb];
             o->guest_stale = NO;
@@ -2553,8 +2623,7 @@ static NSString *const screen_shaders = @"#include <metal_stdlib>\n"
             [e setRenderPipelineState:cursor_pipe];
             [e setVertexBytes:r length:sizeof r atIndex:0];
             [e setFragmentTexture:ctex atIndex:0];
-            NSNumber *sharpSetting = [[NSUserDefaults standardUserDefaults] objectForKey:@"henge.cursor.sharp"];
-            [e setFragmentSamplerState:sharpSetting && !sharpSetting.boolValue ? screen_sampler : cursor_sampler atIndex:0];
+            [e setFragmentSamplerState:cursor_sharp() ? cursor_sampler : screen_sampler atIndex:0];
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
         [e endEncoding];
@@ -2695,7 +2764,7 @@ HvPvgMetal *hv_pvg_metal_create(HvPvgLite *lite) {
         r->worker = dispatch_queue_create("hengevm.pvg", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         r->presenter = dispatch_queue_create("hengevm.present", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         r->screen_lock = OS_UNFAIR_LOCK_INIT;
-        r->tasks = [NSMutableDictionary new];
+        r->extra_tasks = nil;
         r->mapped_textures = [NSMutableDictionary new];
         r->surfaces = [NSMutableDictionary new];
         r->planar = [NSMutableDictionary new];
@@ -2746,7 +2815,12 @@ void hv_pvg_metal_destroy(HvPvgMetal *m) {
         /* GPU completions may have enqueued a final readback on the worker. */
         dispatch_sync(r->worker, ^{
             r->lite = NULL;
-            r->tasks = nil;
+            for (int i = 0; i < 512; i++) {
+                [r->task_tables[i] removeAllObjects];
+                r->task_tables[i] = nil;
+            }
+            for (NSNumber *task in r->extra_tasks) [r->extra_tasks[task] removeAllObjects];
+            r->extra_tasks = nil;
             r->surfaces = nil;
             r->mapped_textures = nil;
             r->planar = nil;
@@ -2793,7 +2867,7 @@ void hv_pvg_metal_submit(HvPvgMetal *m, HvPvgLite *lite, uint32_t ch, uint32_t *
                     } else [r complain:[NSString stringWithFormat:@"command 0x37 of %u bytes: %u resources, %u buffers do not fit", n, nres, nbuf]];
                 } else if ((op == 0x25 || op == 0x28) && n >= 8) { /* {task, ref} or {task, tag, size, ref} */
                     uint32_t ref = op == 0x25 ? args[1] : (n >= 16 ? args[3] : 0);
-                    [r->tasks[@(args[0])] removeObjectForKey:@(ref)];
+                    [[r existingTaskTable:args[0]] removeObjectForRef:ref];
                 } else if (op == 0x35 || op == 0x3e) {
                     [r synchronize:args length:n];
                 } else if (op == 0x34) {
@@ -2802,7 +2876,7 @@ void hv_pvg_metal_submit(HvPvgMetal *m, HvPvgLite *lite, uint32_t ch, uint32_t *
                     /* "May be thrown away": Apple's host only marks it purgeable, and the bytes stay
                        until the system needs the memory. Here they just stay. */
                 } else if (op == 0x20 && n >= 4) {
-                    [r->tasks removeObjectForKey:@(args[0] >> 1)];
+                    [r removeTask:args[0] >> 1];
                 } else {
                     hv_pvg_lite_command(lite, cmd, len);
                     if (op == 8 && n >= 16) {
@@ -2864,6 +2938,14 @@ void hv_pvg_metal_cursor_moved(HvPvgMetal *m) {
         atomic_store(&queued, 0);
         [r drawCursor];
     });
+}
+
+void hv_pvg_metal_set_cursor_style(HvPvgMetal *m, int scale, int sharp) {
+    if (scale >= 1 && scale <= 3) atomic_store_explicit(&hv_cursor_scale_val, scale, memory_order_relaxed);
+    atomic_store_explicit(&hv_cursor_sharp_val, sharp ? 1 : 0, memory_order_relaxed);
+    if (!m) return;
+    HvReplay *r = (__bridge HvReplay *)m;
+    if ([r hasDisplayLayer]) [r screenChanged];
 }
 
 void hv_pvg_metal_unmap(HvPvgMetal *m, uint32_t mapping) {
@@ -2952,20 +3034,38 @@ void hv_pvg_metal_quiesce(HvPvgMetal *m) {
         dispatch_sync(r->worker, ^{});
         dispatch_group_wait(r->completions, DISPATCH_TIME_FOREVER);
         dispatch_sync(r->worker, ^{
-            id<MTLCommandBuffer> cb = nil;
-            id<MTLBlitCommandEncoder> blit = nil;
-            unsigned copied = 0;
-            for (NSNumber *task in r->tasks) {
-                NSMutableDictionary<NSNumber *, HvObject *> *objs = r->tasks[task];
-                for (NSNumber *ref in objs) {
-                    HvObject *o = objs[ref];
-                    if (!o->guest_backed || !o->host_valid || !o->guest_stale) continue;
-                    if (o->parent && o->parent->heap_whole) continue;
+            __block id<MTLCommandBuffer> cb = nil;
+            __block id<MTLBlitCommandEncoder> blit = nil;
+            __block unsigned copied = 0;
+            for (uint32_t t = 0; t < 512; t++) {
+                HvTaskObjectTable *objs = r->task_tables[t];
+                if (!objs) continue;
+                [objs forEachObject:^(id obj) {
+                    HvObject *o = obj;
+                    if (!o->guest_backed || !o->host_valid || !o->guest_stale) return;
+                    if (o->parent && o->parent->heap_whole) return;
                     if (!cb) cb = [r->queue commandBuffer];
-                    [r page:o toGuest:YES task:task.unsignedIntValue blit:&blit commandBuffer:cb];
+                    id<MTLBlitCommandEncoder> b = blit;
+                    [r page:o toGuest:YES task:t blit:&b commandBuffer:cb];
+                    blit = b;
                     o->guest_stale = NO;
                     copied++;
-                }
+                }];
+            }
+            for (NSNumber *task in r->extra_tasks) {
+                HvTaskObjectTable *objs = r->extra_tasks[task];
+                uint32_t t = task.unsignedIntValue;
+                [objs forEachObject:^(id obj) {
+                    HvObject *o = obj;
+                    if (!o->guest_backed || !o->host_valid || !o->guest_stale) return;
+                    if (o->parent && o->parent->heap_whole) return;
+                    if (!cb) cb = [r->queue commandBuffer];
+                    id<MTLBlitCommandEncoder> b = blit;
+                    [r page:o toGuest:YES task:t blit:&b commandBuffer:cb];
+                    blit = b;
+                    o->guest_stale = NO;
+                    copied++;
+                }];
             }
             [blit endEncoding];
             if (cb) {

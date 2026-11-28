@@ -37,7 +37,7 @@ struct BootDisplay: View {
                     }
                 }
                 GPUScreen(display: display, role: role, surface: surface,
-                          matchScreenColors: matchScreenColors, brightness: screenBrightness)
+                          gpuLive: gpuLive, matchScreenColors: matchScreenColors, brightness: screenBrightness)
                     .allowsHitTesting(false)
             }
         }
@@ -79,6 +79,7 @@ private struct GPUScreen: UIViewRepresentable {
     let display: DisplayRouter
     let role: DisplayTargetSelection.Role
     let surface: UUID
+    let gpuLive: Bool
     let matchScreenColors: Bool
     let brightness: Double
     private static let srgb = CGColorSpace(name: CGColorSpace.sRGB)
@@ -140,6 +141,9 @@ private struct GPUScreen: UIViewRepresentable {
         // The guest's display profile is sRGB, and the presenter writes sRGB
         // values. A nil colorspace skips matching on wide-gamut iPad screens.
         metalLayer.colorspace = matchScreenColors ? Self.srgb : nil
+        let opaque = gpuLive && brightness >= 0.999
+        view.isOpaque = opaque
+        metalLayer.isOpaque = opaque
         view.alpha = CGFloat(min(max(brightness, 0.4), 1))
     }
 

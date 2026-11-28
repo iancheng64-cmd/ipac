@@ -74,7 +74,7 @@ static int push(Queue *q, const uint8_t *data, uint32_t len) {
         f->data = malloc(len);
         memcpy(f->data, data, len);
         f->len = len;
-        q->tail++;
+        __atomic_store_n(&q->tail, q->tail + 1, __ATOMIC_RELEASE);
     }
     pthread_mutex_unlock(&q->mu);
     return ok;
@@ -264,6 +264,7 @@ static void transmit(void *opaque, const uint8_t *frame, uint32_t len) {
 
 void hv_net_poll(void) {
     if (!net) return;
+    if (__atomic_load_n(&to_guest.head, __ATOMIC_RELAXED) == __atomic_load_n(&to_guest.tail, __ATOMIC_ACQUIRE)) return;
     for (;;) {
         pthread_mutex_lock(&to_guest.mu);
         Frame f = {0, NULL};

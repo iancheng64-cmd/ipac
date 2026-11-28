@@ -3,6 +3,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #include "pvg_page_runs.h"
 #include "pvg_command_copy.h"
+#include "pvg_object_table.h"
 #include "pvg_lite.h"
 #include "vmapple.h"
 #include <assert.h>
@@ -145,6 +146,61 @@ static void check_command_copies(HvPvgMetal *metal) {
     puts("Metal command snapshots: fragmented input, GPU fill bytes, unreadable segment and cache limit passed");
 }
 
+static void check_object_table_and_cursor_style(void) {
+    HvTaskObjectTable *table = [HvTaskObjectTable new];
+    assert([table objectForRef:0] == nil && [table objectForRef:9000] == nil);
+    NSString *v0 = @"obj-0";
+    NSString *v100 = @"obj-100";
+    NSString *v100b = @"obj-100b";
+    NSString *v9000 = @"obj-9000";
+    [table setObject:v0 forRef:0];
+    [table setObject:v100 forRef:100];
+    [table setObject:v9000 forRef:9000];
+    assert([[table objectForRef:0] isEqualToString:@"obj-0"]);
+    assert([[table objectForRef:100] isEqualToString:@"obj-100"]);
+    assert([[table objectForRef:9000] isEqualToString:@"obj-9000"]);
+    [table setObject:v100b forRef:100];
+    assert([[table objectForRef:100] isEqualToString:@"obj-100b"]);
+    [table removeObjectForRef:100];
+    [table removeObjectForRef:9000];
+    assert([table objectForRef:100] == nil && [table objectForRef:9000] == nil);
+
+    __block NSUInteger visited = 0;
+    [table forEachObject:^(id obj) {
+        (void)obj;
+        visited++;
+    }];
+    assert(visited == 1);
+    [table removeAllObjects];
+    assert([table objectForRef:0] == nil);
+
+    if (getenv("HV_PVG_BENCH_OBJECTS")) {
+        enum { N = 256, REPS = 200000 };
+        HvTaskObjectTable *fast = [HvTaskObjectTable new];
+        NSMutableDictionary<NSNumber *, id> *dict = [NSMutableDictionary new];
+        id dummy = [NSObject new];
+        for (uint32_t i = 0; i < N; i++) {
+            [fast setObject:dummy forRef:i];
+            dict[@(i)] = dummy;
+        }
+        mach_timebase_info_data_t tb; mach_timebase_info(&tb);
+        uintptr_t acc = 0;
+        uint64_t t0 = mach_absolute_time();
+        for (uint32_t r = 0; r < REPS; r++) acc ^= (uintptr_t)[fast objectForRef:r % N];
+        uint64_t t1 = mach_absolute_time();
+        for (uint32_t r = 0; r < REPS; r++) acc ^= (uintptr_t)dict[@(r % N)];
+        uint64_t t2 = mach_absolute_time();
+        assert(acc != 0xdeadbeefULL);
+        printf("Metal object lookup: flat table %.1f ns vs NSDictionary @(ref) %.1f ns\n",
+               (double)(t1 - t0) * tb.numer / tb.denom / REPS,
+               (double)(t2 - t1) * tb.numer / tb.denom / REPS);
+    }
+
+    hv_pvg_metal_set_cursor_style(NULL, 2, 0);
+    hv_pvg_metal_set_cursor_style(NULL, 1, 1);
+    puts("Metal object table and cursor style passed");
+}
+
 /* A real, small scanout surface submitted to the production Metal worker. */
 static void submit_surface(HvPvgMetal *metal) {
     const uint64_t table = VMAPPLE_MEM + 0x20000, desc = table + 0x4000, list = desc + 0x4000, pixels = list + 0x4000;
@@ -205,7 +261,7 @@ static void check_buffer_aliases(void) {
 
 int main(void) {
     alarm(30);
-    @autoreleasepool { check_buffer_aliases(); }
+    @autoreleasepool { check_buffer_aliases(); check_object_table_and_cursor_style(); }
     for (int cycle = 0; cycle < 6; cycle++) @autoreleasepool {
         HvCfgParams cfg = {.nr_cpus = 2};
         if (hv_machine_init(&machine, 4 << 20) ||

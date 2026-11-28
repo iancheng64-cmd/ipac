@@ -749,6 +749,28 @@ static void wheel(uint16_t axis, int amount) {
 void hv_vm_mouse_wheel(int dy) { wheel(HV_REL_WHEEL, dy); }
 void hv_vm_mouse_hwheel(int dx) { wheel(HV_REL_HWHEEL, dx); }
 
+void hv_vm_mouse_scroll(int dx, int dy) {
+    while (dx || dy) {
+        HvInputEvent events[2];
+        unsigned count = 0;
+        if (dy) {
+            int piece = dy > 100 ? 100 : dy < -100 ? -100 : dy;
+            events[count++] = (HvInputEvent){HV_EV_REL, HV_REL_WHEEL, piece};
+            dy -= piece;
+        }
+        if (dx) {
+            int piece = dx > 100 ? 100 : dx < -100 ? -100 : dx;
+            events[count++] = (HvInputEvent){HV_EV_REL, HV_REL_HWHEEL, piece};
+            dx -= piece;
+        }
+        hv_virtio_input_report(board.mouse, events, count);
+    }
+}
+
+void hv_vm_set_cursor_style(int scale, int sharp) {
+    hv_pvg_lite_set_cursor_style(board.pvg, scale, sharp);
+}
+
 void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms) {
     if (x < 0) x = 0;
     if (x > HV_TP_SENSOR_X) x = HV_TP_SENSOR_X;

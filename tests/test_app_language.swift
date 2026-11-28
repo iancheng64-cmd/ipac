@@ -63,6 +63,12 @@ struct AppLanguageTests {
         let compactKey = "JIT 中繼資料緊湊儲存（實驗性）"
         expect(L10n.text(compactKey, language: .en, bundle: bundle) != compactKey,
                "The compact JIT preference has a real English translation")
+        let sillKey = "已切換為 Sill 多指觸控板模式"
+        expect(L10n.text(sillKey, language: .en, bundle: bundle) != sillKey,
+               "Sill touch mode toast has a real English translation")
+        let imeKey = "中/英 IME"
+        expect(L10n.text(imeKey, language: .en, bundle: bundle) == "EN/IME",
+               "Sill IME button translates to EN/IME")
 
         print("App language: \(checks) checks passed")
     }

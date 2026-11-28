@@ -127,8 +127,15 @@ test-session-power: $(B)/test_session_power
 	$(B)/test_session_power
 .PHONY: test-session-power
 
-$(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m $(ENGINE) $(DEV)
-	$(CC) $(CFLAGS) -fobjc-arc $^ $(METAL_LIBS) -o $@
+$(B)/test_sill_controls: ios/Henge/SillKeyboardModel.swift ios/Henge/SillTouchEngine.swift ios/Henge/SessionHUDPolicy.swift tests/test_sill_controls.swift | $(B)
+	xcrun --sdk macosx swiftc -swift-version 5 -warnings-as-errors -parse-as-library $^ -o $@
+
+test-sill-controls: $(B)/test_sill_controls
+	$(B)/test_sill_controls
+.PHONY: test-sill-controls
+
+$(B)/test_pvg_lifecycle: tests/test_pvg_lifecycle.m devices/pvg_object_table.h $(ENGINE) $(DEV)
+	$(CC) $(CFLAGS) -fobjc-arc tests/test_pvg_lifecycle.m $(ENGINE) $(DEV) $(METAL_LIBS) -o $@
 
 $(B)/hvsparse: tools/hvsparse_main.c host/hvsparse.c host/hvsparse.h | $(B)
 	$(CC) $(CFLAGS) tools/hvsparse_main.c host/hvsparse.c -o $@

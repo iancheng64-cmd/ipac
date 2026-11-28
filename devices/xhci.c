@@ -950,8 +950,10 @@ void hv_xhci_key(HvXhci *x, uint8_t usage, int down) {
     }
     /* Boot reports describe the entire keyboard. Under prolonged backpressure
        retain the oldest pending history, but never leave a key held forever. */
-    uint32_t at = x->rtail - x->rhead < HV_XHCI_REPORTS ? x->rtail++ : x->rtail - 1;
+    uint32_t tail = x->rtail;
+    uint32_t at = tail - x->rhead < HV_XHCI_REPORTS ? tail++ : tail - 1;
     memcpy(x->reports[at % HV_XHCI_REPORTS], s, 8);
+    __atomic_store_n(&x->rtail, tail, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&x->mu);
     hv_machine_wake(x->m);
 }
@@ -1129,9 +1131,10 @@ static void tp_queue(HvXhci *x, uint32_t ts_ms) {
     x->tp_ts = now > x->tp_ts ? now : x->tp_ts + 1;
     int len = tp_build_report(x, r);
     if (x->tp_rtail - x->tp_rhead == HV_TP_REPORTS) tp_make_room(x);
-    unsigned at = x->tp_rtail++ % HV_TP_REPORTS;
+    unsigned at = x->tp_rtail % HV_TP_REPORTS;
     memcpy(x->tp_reports[at], r, (size_t)len);
     x->tp_rlen[at] = (uint8_t)len;
+    __atomic_store_n(&x->tp_rtail, x->tp_rtail + 1, __ATOMIC_RELEASE);
 }
 
 static struct HvTpFinger *tp_new_finger(HvXhci *x) {
@@ -1199,8 +1202,14 @@ void hv_xhci_touch_button(HvXhci *x, int down) {
 
 void hv_xhci_poll(HvXhci *x) {
     if (!x) return;
-    for (int slot = 1; slot <= HV_XHCI_SLOTS; slot++)
-        if (x->slots[slot].dev >= 0) run_ep_in(x, slot);
+    int have_kbd = __atomic_load_n(&x->rhead, __ATOMIC_RELAXED) != __atomic_load_n(&x->rtail, __ATOMIC_ACQUIRE);
+    int have_tp = __atomic_load_n(&x->tp_rhead, __ATOMIC_RELAXED) != __atomic_load_n(&x->tp_rtail, __ATOMIC_ACQUIRE);
+    if (!have_kbd && !have_tp) return;
+    for (int slot = 1; slot <= HV_XHCI_SLOTS; slot++) {
+        int dev = x->slots[slot].dev;
+        if (dev == 0 && have_kbd) run_ep_in(x, slot);
+        else if (dev == 1 && have_tp) run_ep_in(x, slot);
+    }
 }
 
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus) {
